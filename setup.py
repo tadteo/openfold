@@ -29,13 +29,16 @@ version_dependent_macros = [
 ]
 
 extra_cuda_flags = [
-    '-std=c++14',
+    '-std=c++17',
     '-maxrregcount=50',
     '-U__CUDA_NO_HALF_OPERATORS__',
     '-U__CUDA_NO_HALF_CONVERSIONS__',
     '--expt-relaxed-constexpr',
     '--expt-extended-lambda'
 ]
+
+extra_cxx_flags = ['-std=c++17']
+
 
 def get_cuda_bare_metal_version(cuda_dir):
     if cuda_dir==None or torch.version.cuda==None:
@@ -91,7 +94,7 @@ if bare_metal_major != -1:
             )
         ],
         extra_compile_args={
-            'cxx': ['-O3'] + version_dependent_macros,
+            'cxx': ['-O3'] + version_dependent_macros + extra_cxx_flags,
             'nvcc': (
                 ['-O3', '--use_fast_math'] +
                 version_dependent_macros +
@@ -107,7 +110,7 @@ else:
             "openfold/utils/kernel/csrc/softmax_cuda_stub.cpp",
         ],
         extra_compile_args={
-            'cxx': ['-O3'],
+            'cxx': ['-O3'] + extra_cxx_flags,
         }
     )]
 

@@ -34,6 +34,13 @@ from tests.config import consts
 import tests.compare_utils as compare_utils
 from tests.data_utils import random_template_feats, random_attention_inputs
 
+import deepspeed
+
+print(f"PyTorch version: {torch.__version__}")
+print(f"DeepSpeed version: {deepspeed.__version__}")
+
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
 
 @compare_utils.skip_unless_ds4s_installed()
 class TestDeepSpeedKernel(unittest.TestCase):

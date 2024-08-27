@@ -34,7 +34,8 @@ def get_checkpoint_fn():
     if(deepspeed_is_configured):
         checkpoint = deepspeed.checkpointing.checkpoint
     else:
-        checkpoint = torch.utils.checkpoint.checkpoint
+        # checkpoint = torch.utils.checkpoint.checkpoint
+        checkpoint = lambda f, *args, **kwargs: torch.utils.checkpoint.checkpoint(f, *args, use_reentrant=False, **kwargs)
 
     return checkpoint
 

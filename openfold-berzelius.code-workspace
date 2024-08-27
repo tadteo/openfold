@@ -1,0 +1,17 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../logs/openfold_train"
+		},
+		{
+			"path": "../phd_utils"
+		},
+		{
+			"path": "../openfold_training_output"
+		}
+	],
+	"settings": {}
+}

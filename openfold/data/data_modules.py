@@ -205,8 +205,11 @@ class OpenFoldSingleDataset(torch.utils.data.Dataset):
         return self._chain_ids[idx]
 
     def __getitem__(self, idx):
+        # print(f"Processing item {idx}")
         name = self.idx_to_chain_id(idx)
+        # print(f"Chain ID: {name}")
         alignment_dir = os.path.join(self.alignment_dir, name)
+        # print(f"Alignment directory: {alignment_dir}")
 
         alignment_index = None
         if self.alignment_index is not None:
@@ -222,6 +225,9 @@ class OpenFoldSingleDataset(torch.utils.data.Dataset):
                 chain_id = None
 
             path = os.path.join(self.data_dir, file_id)
+            # print(f"Checking file: {path}")
+            # print(f"Supported extensions: {self.supported_exts}")
+            
             if self._structure_index is not None:
                 structure_index_entry = self._structure_index[name]
                 assert (len(structure_index_entry["files"]) == 1)
@@ -230,12 +236,14 @@ class OpenFoldSingleDataset(torch.utils.data.Dataset):
             else:
                 ext = None
                 for e in self.supported_exts:
+                    # print(f"Checking extension: {e}")
                     if os.path.exists(path + e):
                         ext = e
+                        # print(f"Found file with extension: {ext}")
                         break
 
                 if ext is None:
-                    raise ValueError("Invalid file type")
+                    raise ValueError(f"Invalid file type for {name}. Path: {path}")
 
             path += ext
             if ext == ".cif":

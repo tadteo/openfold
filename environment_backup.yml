@@ -2,23 +2,24 @@ name: openfold-env
 channels:
   - conda-forge
   - bioconda
-  - nvidia
   - pytorch
 dependencies:
-  - python=3.11
-  - libgcc
-  - setuptools
+  - python=3.9
+  - libgcc=7.2
+  - setuptools=59.5.0
   - pip
-  - openmm
+  - openmm=7.7
   - pdbfixer
+  - pytorch-lightning
   - biopython
-  - numpy<2
+  - numpy
   - pandas
   - PyYAML==5.4.1
   - requests
-  - scipy
-  - tqdm
+  - scipy==1.7
+  - tqdm==4.62.2
   - typing-extensions==4.0
+  - wandb
   - modelcif==0.7
   - awscli
   - ml-collections
@@ -29,14 +30,9 @@ dependencies:
   - bioconda::hhsuite==3.3.0
   - bioconda::kalign2==2.04
   - bioconda::mmseqs2
+  - pytorch::pytorch=1.12.*
   - pip:
-      - torch
-      - torchvision
-      - torchaudio
-      - wandb
-      - deepspeed
-      - dm-tree==0.1.8
+      - deepspeed==0.12.4
+      - dm-tree==0.1.6
       - git+https://github.com/NVIDIA/dllogger.git
-      - lightning
-      - mpi4py
-      # - flash-attn
+      - git+https://github.com/Dao-AILab/flash-attention.git@5b838a8

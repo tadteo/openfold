@@ -29,7 +29,7 @@ version_dependent_macros = [
 ]
 
 extra_cuda_flags = [
-    '-std=c++14',
+    '-std=c++17',
     '-maxrregcount=50',
     '-U__CUDA_NO_HALF_OPERATORS__',
     '-U__CUDA_NO_HALF_CONVERSIONS__',
@@ -130,7 +130,7 @@ setup(
     classifiers=[
         'License :: OSI Approved :: Apache Software License',
         'Operating System :: POSIX :: Linux',
-        'Programming Language :: Python :: 3.9,'
+        'Programming Language :: Python :: 3.11,'
         'Topic :: Scientific/Engineering :: Artificial Intelligence',
     ],
 )

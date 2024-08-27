@@ -360,7 +360,7 @@ def main(args):
             every_n_epochs=1,
             auto_insert_metric_name=False,
             save_top_k=-1,
-            filename=f'epoch={{epoch}}-step={{step}}-{timestamp}-{{val_lddt_ca:.2f}}',
+            filename=f'epoch={{epoch}}-step={{step}}-{datetime.timestamp}-{{val_lddt_ca:.2f}}',
             dirpath='checkpoints',
         )
         callbacks.append(mc)
@@ -406,16 +406,11 @@ def main(args):
             wandb_id = wandb.run.id
         else:
             wandb_id = None
-        # Broadcast the wandb_id to all processes
-        if args.mpi_plugin:
-            wandb_id = torch.tensor([wandb_id if wandb_id else 0], dtype=torch.long).to(args.model_device)
-            torch.distributed.broadcast(wandb_id, src=0)
-            wandb_id = wandb_id.item() if wandb_id.item() != 0 else None
-
+        
         wdb_logger = WandbLogger(
             name=args.experiment_name,
             save_dir=args.output_dir,
-            id=args.wandb_id,
+            id=wandb_id,
             project=args.wandb_project,
             resume="allow",
             **{"entity": args.wandb_entity}

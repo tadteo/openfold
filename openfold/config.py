@@ -484,6 +484,7 @@ config = mlc.ConfigDict(
             "eps": eps,
             "is_multimer": False,
             "seqemb_mode_enabled": False, # Global flag for enabling seq emb mode
+            "evoformer_type" : "MambaEvoformer",  # or "MambaEvoformer" or "Evoformer"
         },
         "model": {
             "_mask_trans": False,
@@ -588,6 +589,29 @@ config = mlc.ConfigDict(
                 "enabled": True,
             },
             "evoformer_stack": {
+                "c_m": c_m,
+                "c_z": c_z,
+                "c_hidden_msa_att": 32,
+                "c_hidden_opm": 32,
+                "c_hidden_mul": 128,
+                "c_hidden_pair_att": 32,
+                "c_s": c_s,
+                "no_heads_msa": 8,
+                "no_heads_pair": 4,
+                "no_blocks": 48,
+                "transition_n": 4,
+                "msa_dropout": 0.15,
+                "pair_dropout": 0.25,
+                "no_column_attention": False,
+                "opm_first": False,
+                "fuse_projection_weights": False,
+                "blocks_per_ckpt": blocks_per_ckpt,
+                "clear_cache_between_blocks": False,
+                "tune_chunk_size": tune_chunk_size,
+                "inf": 1e9,
+                "eps": eps,  # 1e-10,
+            },
+            "mamba_evoformer_stack": {
                 "c_m": c_m,
                 "c_z": c_z,
                 "c_hidden_msa_att": 32,

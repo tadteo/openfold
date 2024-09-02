@@ -360,7 +360,7 @@ def main(args):
             every_n_epochs=1,
             auto_insert_metric_name=False,
             save_top_k=-1,
-            filename=f'epoch={{epoch}}-step={{step}}-{datetime.timestamp}-{{val_lddt_ca:.2f}}',
+            filename=f'{run_desc}-epoch={{epoch}}-step={{step}}-{datetime.timestamp}-{{val_lddt_ca:.2f}}',
             dirpath='checkpoints',
         )
         callbacks.append(mc)
@@ -662,7 +662,12 @@ if __name__ == "__main__":
     )
     parser.add_argument("--mpi_plugin", action="store_true", default=False,
                         help="Whether to use MPI for parallele processing")
-
+    
+    parser.add_argument(
+        "--run_description", type=str, default="",
+        help="Short description for the run to be used in filenames"
+    )
+    
     trainer_group = parser.add_argument_group(
         'Arguments to pass to PyTorch Lightning Trainer')
     trainer_group.add_argument(
@@ -703,6 +708,11 @@ if __name__ == "__main__":
 
     if(args.resume_from_jax_params is not None and args.resume_from_ckpt is not None):
         raise ValueError("Choose between loading pretrained Jax-weights and a checkpoint-path")
-
-
+    
+    # Use run_description in filenames
+    if args.run_description:
+        run_desc = args.run_description.replace(" ", "_")
+    else:
+        run_desc = "run"
+    
     main(args)

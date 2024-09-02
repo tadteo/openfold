@@ -28,7 +28,9 @@ from openfold.model.triangular_multiplicative_update import (
 from openfold.utils.checkpointing import checkpoint_blocks, get_checkpoint_fn
 from openfold.utils.chunk_utils import chunk_layer, ChunkSizeTuner
 from openfold.utils.tensor_utils import add
+from openfold.utils.triangular_positional_encoding import TriangularPositionalEncoding
 
+from mamba_ssm import Mamba
 
 class MSATransition(nn.Module):
     """
@@ -116,7 +118,10 @@ class PairStack(nn.Module):
         pair_dropout: float,
         fuse_projection_weights: bool,
         inf: float,
-        eps: float
+        eps: float,
+        d_state: int = 64,  # SSM state expansion factor
+        d_conv: int = 4,    # Local convolution width try to change these
+        expand: int = 2,    # Block expansion factor
     ):
         super(PairStack, self).__init__()
 
@@ -139,18 +144,16 @@ class PairStack(nn.Module):
                 c_hidden_mul,
             )
 
-        self.tri_att_start = TriangleAttention(
-            c_z,
-            c_hidden_pair_att,
-            no_heads_pair,
-            inf=inf,
-        )
-        self.tri_att_end = TriangleAttention(
-            c_z,
-            c_hidden_pair_att,
-            no_heads_pair,
-            inf=inf,
-        )
+        # Initialize the TriangularPositionalEncoding module
+        self.triangular_pos_enc = TriangularPositionalEncoding(c_z)
+
+        # Initialize the Mamba module
+        self.mamba = Mamba(
+            d_model=c_z,  # Model dimension
+            d_state=d_state,  # SSM state expansion factor
+            d_conv=d_conv,    # Local convolution width
+            expand=expand,    # Block expansion factor
+        ).to("cuda")
 
         self.pair_transition = PairTransition(
             c_z,
@@ -203,40 +206,38 @@ class PairStack(nn.Module):
 
         del tmu_update
 
+        # Apply triangular positional encoding to convert matrix to 1D vector
+        z = self.triangular_pos_enc(z)
+
+        # Reshape z to [batch_size, seq_len * seq_len, dim] for mamba
+        batch_size, seq_len, _, dim = z.shape
+        z = z.reshape(batch_size, seq_len * seq_len, dim).contiguous()
+        # print(f"z.shape is: {z.shape}")
+        
+        # Add padding to ensure dimensions are divisible by 8
+        # pad_len = (8 - (seq_len * seq_len) % 8) % 8
+        # if pad_len > 0:
+        #     z = torch.nn.functional.pad(z, (0, 0, 0, pad_len))
+
+        # print(f"The z shape is: {z.shape}")
+        # Process the 1D vector with mamba module
+        z = self.mamba(z)
+
+        # Remove padding
+        # if pad_len > 0:
+        #     z = z[:, :-pad_len, :]
+
+        # Reconvert the 1D vector back to a matrix
+        z = z.reshape(batch_size, seq_len, seq_len, dim).contiguous()
+
+
         z = add(z,
                 self.ps_dropout_row_layer(
-                    self.tri_att_start(
-                        z,
-                        mask=pair_mask,
-                        chunk_size=_attn_chunk_size,
-                        use_memory_efficient_kernel=False,
-                        use_deepspeed_evo_attention=use_deepspeed_evo_attention,
-                        use_lma=use_lma,
-                        inplace_safe=inplace_safe,
-                    )
+                    z
                 ),
                 inplace=inplace_safe,
                 )
-
-        z = z.transpose(-2, -3)
-        if (inplace_safe):
-            z = z.contiguous()
-
-        z = add(z,
-                self.ps_dropout_row_layer(
-                    self.tri_att_end(
-                        z,
-                        mask=pair_mask.transpose(-1, -2),
-                        chunk_size=_attn_chunk_size,
-                        use_memory_efficient_kernel=False,
-                        use_deepspeed_evo_attention=use_deepspeed_evo_attention,
-                        use_lma=use_lma,
-                        inplace_safe=inplace_safe,
-                    )
-                ),
-                inplace=inplace_safe,
-                )
-
+        
         z = z.transpose(-2, -3)
         if (inplace_safe):
             z = z.contiguous()

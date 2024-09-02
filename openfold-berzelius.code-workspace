@@ -11,6 +11,9 @@
 		},
 		{
 			"path": "../openfold_training_output"
+		},
+		{
+			"path": "../openfold_inference_output"
 		}
 	],
 	"settings": {}

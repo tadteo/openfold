@@ -39,6 +39,6 @@ dependencies:
       - git+https://github.com/NVIDIA/dllogger.git
       - lightning
       - mpi4py
-      - causal-conv1d>=1.4.0
       - mamba-ssm
+      - causal-conv1d>=1.4.0
       # - flash-attn

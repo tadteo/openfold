@@ -112,8 +112,8 @@ class PairStack(nn.Module):
         self,
         c_z: int,
         c_hidden_mul: int,
-        c_hidden_pair_att: int,
-        no_heads_pair: int,
+        c_hidden_pair_att: int, #can be removed
+        no_heads_pair: int, #can be removed
         transition_n: int,
         pair_dropout: float,
         fuse_projection_weights: bool,
@@ -125,24 +125,24 @@ class PairStack(nn.Module):
     ):
         super(PairStack, self).__init__()
 
-        if fuse_projection_weights:
-            self.tri_mul_out = FusedTriangleMultiplicationOutgoing(
-                c_z,
-                c_hidden_mul,
-            )
-            self.tri_mul_in = FusedTriangleMultiplicationIncoming(
-                c_z,
-                c_hidden_mul,
-            )
-        else:
-            self.tri_mul_out = TriangleMultiplicationOutgoing(
-                c_z,
-                c_hidden_mul,
-            )
-            self.tri_mul_in = TriangleMultiplicationIncoming(
-                c_z,
-                c_hidden_mul,
-            )
+        # if fuse_projection_weights:
+        #     self.tri_mul_out = FusedTriangleMultiplicationOutgoing(
+        #         c_z,
+        #         c_hidden_mul,
+        #     )
+        #     self.tri_mul_in = FusedTriangleMultiplicationIncoming(
+        #         c_z,
+        #         c_hidden_mul,
+        #     )
+        # else:
+        #     self.tri_mul_out = TriangleMultiplicationOutgoing(
+        #         c_z,
+        #         c_hidden_mul,
+        #     )
+        #     self.tri_mul_in = TriangleMultiplicationIncoming(
+        #         c_z,
+        #         c_hidden_mul,
+        #     )
 
         # Initialize the TriangularPositionalEncoding module
         self.triangular_pos_enc = TriangularPositionalEncoding(c_z)
@@ -167,14 +167,16 @@ class PairStack(nn.Module):
         pair_mask: torch.Tensor,
         chunk_size: Optional[int] = None,
         use_deepspeed_evo_attention: bool = False,
-        use_lma: bool = False,
+        use_lma: bool = False, #can be removed
         inplace_safe: bool = False,
-        _mask_trans: bool = True,
-        _attn_chunk_size: Optional[int] = None
+        _mask_trans: bool = True, #can be removed
+        _attn_chunk_size: Optional[int] = None #can be removed
     ) -> torch.Tensor:
         # DeepMind doesn't mask these transitions in the source, so _mask_trans
         # should be disabled to better approximate the exact activations of
         # the original.
+        
+        ### Can be removed
         pair_trans_mask = pair_mask if _mask_trans else None
 
         if (_attn_chunk_size is None):
@@ -205,6 +207,7 @@ class PairStack(nn.Module):
             z = tmu_update
 
         del tmu_update
+        ###
 
         # Apply triangular positional encoding to convert matrix to 1D vector
         z = self.triangular_pos_enc(z)
@@ -275,13 +278,22 @@ class MSABlock(nn.Module, ABC):
 
         self.opm_first = opm_first
 
-        self.msa_att_row = MSARowAttentionWithPairBias(
-            c_m=c_m,
-            c_z=c_z,
-            c_hidden=c_hidden_msa_att,
-            no_heads=no_heads_msa,
-            inf=inf,
-        )
+        # Initialize the Mamba module for row attention
+        self.mamba_row = Mamba(
+            d_model=c_m,  # Model dimension
+            d_state=64,  # SSM state expansion factor
+            d_conv=4,    # Local convolution width
+            expand=2,    # Block expansion factor
+        ).to("cuda")
+
+        # Initialize the Mamba module for column attention
+        self.mamba_col = Mamba(
+            d_model=c_m,  # Model dimension
+            d_state=64,  # SSM state expansion factor
+            d_conv=4,    # Local convolution width
+            expand=2,    # Block expansion factor
+        ).to("cuda")
+
 
         self.msa_dropout_layer = DropoutRowwise(msa_dropout)
 
@@ -395,16 +407,6 @@ class MambaEvoformerBlock(MSABlock):
                                              inf=inf,
                                              eps=eps)
 
-        # Specifically, seqemb mode does not use column attention
-        self.no_column_attention = no_column_attention
-
-        if not self.no_column_attention:
-            self.msa_att_col = MSAColumnAttention(
-                c_m,
-                c_hidden_msa_att,
-                no_heads_msa,
-                inf=inf,
-            )
 
     def forward(self,
         m: Optional[torch.Tensor],
@@ -444,18 +446,17 @@ class MambaEvoformerBlock(MSABlock):
                                      inplace_safe=inplace_safe,
                                      _offload_inference=_offload_inference)
 
+        # Apply Mamba for row attention
+        batch_size, seq_len, num_rows, dim = m.shape
+
+        # Process each row separately   new_m = m.clone()
+        new_m = m.clone()
+        for i in range(num_rows):
+            new_m[:, :, i, :] = self.mamba_row(m[:, :, i, :]) # Shape: [batch_size, seq_len, dim]
+        m = new_m
+            
         m = add(m,
-                self.msa_dropout_layer(
-                    self.msa_att_row(
-                        m,
-                        z=z,
-                        mask=msa_mask,
-                        chunk_size=_attn_chunk_size,
-                        use_memory_efficient_kernel=False,
-                        use_deepspeed_evo_attention=use_deepspeed_evo_attention,
-                        use_lma=use_lma,
-                    )
-                ),
+                self.msa_dropout_layer(m),
                 inplace=inplace_safe,
                 )
 
@@ -467,19 +468,12 @@ class MambaEvoformerBlock(MSABlock):
             torch.cuda.empty_cache()
             m, z = input_tensors
 
-        # Specifically, column attention is not used in seqemb mode.
-        if not self.no_column_attention:
-            m = add(m,
-                    self.msa_att_col(
-                        m,
-                        mask=msa_mask,
-                        chunk_size=chunk_size,
-                        use_deepspeed_evo_attention=use_deepspeed_evo_attention,
-                        use_lma=use_lma,
-                        use_flash=use_flash,
-                    ),
-                    inplace=inplace_safe,
-                    )
+        # Apply Mamba for column attention
+        # Process each column separately
+        new_m = m.clone()
+        for i in range(seq_len):
+            new_m[:, i, :, :] = self.mamba_col(m[:, i, :, :])
+        m = new_m
 
         m = add(
             m,
@@ -581,14 +575,6 @@ class ExtraMSABlock(MSABlock):
 
         self.ckpt = ckpt
 
-        self.msa_att_col = MSAColumnGlobalAttention(
-            c_in=c_m,
-            c_hidden=c_hidden_msa_att,
-            no_heads=no_heads_msa,
-            inf=inf,
-            eps=eps,
-        )
-
     def forward(self,
         m: Optional[torch.Tensor],
         z: Optional[torch.Tensor],
@@ -623,22 +609,22 @@ class ExtraMSABlock(MSABlock):
                                      inplace_safe=inplace_safe,
                                      _offload_inference=_offload_inference)
 
+        # Reshape m before calling mamba_row
+        batch_size, seq_len, msa_rows, dim = m.shape
+        m = m.reshape(batch_size, seq_len * msa_rows, dim).contiguous()
+
+        # print(f"the shape of m is: {m.shape}")
         m = add(m,
             self.msa_dropout_layer(
-                self.msa_att_row(
-                    m.clone() if torch.is_grad_enabled() else m, 
-                    z=z.clone() if torch.is_grad_enabled() else z, 
-                    mask=msa_mask, 
-                    chunk_size=_attn_chunk_size,
-                    use_lma=use_lma,
-                    use_deepspeed_evo_attention=use_deepspeed_evo_attention,
-                    use_memory_efficient_kernel=not (use_lma or use_deepspeed_evo_attention),
-                    _checkpoint_chunks=
-                        self.ckpt if torch.is_grad_enabled() else False,
+                self.mamba_row(
+                    m.clone() if torch.is_grad_enabled() else m
                 )
             ),
             inplace=inplace_safe,
         )
+        
+        # Reshape m back to original dimensions
+        m = m.reshape(batch_size, seq_len, msa_rows, dim).contiguous()
 
         if (not inplace_safe):
             input_tensors = [m, z]
@@ -656,15 +642,18 @@ class ExtraMSABlock(MSABlock):
                 torch.cuda.empty_cache()
                 m, z = input_tensors
 
+            # Reshape m before calling mamba_row
+            batch_size, seq_len, msa_cols, dim = m.shape
+            m = m.reshape(batch_size, seq_len * msa_cols, dim).contiguous()
+
             m = add(m,
-                    self.msa_att_col(
-                        m,
-                        mask=msa_mask,
-                        chunk_size=chunk_size,
-                        use_lma=use_lma,
+                    self.mamba_col(
+                        m
                     ),
                     inplace=inplace_safe,
                     )
+            # Reshape m back to original dimensions
+            m = m.reshape(batch_size, seq_len, msa_cols, dim).contiguous()
 
             m = add(
                 m,
@@ -742,19 +731,19 @@ class MambaEvoformerStack(nn.Module):
         self,
         c_m: int,
         c_z: int,
-        c_hidden_msa_att: int,
-        c_hidden_opm: int,
+        c_hidden_msa_att: int, #can be removed
+        c_hidden_opm: int, 
         c_hidden_mul: int,
-        c_hidden_pair_att: int,
+        c_hidden_pair_att: int, #can be removed
         c_s: int,
-        no_heads_msa: int,
-        no_heads_pair: int,
+        no_heads_msa: int, #can be removed
+        no_heads_pair: int, #can be removed
         no_blocks: int,
         transition_n: int,
         msa_dropout: float,
         pair_dropout: float,
-        no_column_attention: bool,
-        opm_first: bool,
+        no_column_attention: bool, #can be  changed to mamba
+        opm_first: bool, 
         fuse_projection_weights: bool,
         blocks_per_ckpt: int,
         inf: float,

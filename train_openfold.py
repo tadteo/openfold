@@ -14,6 +14,8 @@ from pytorch_lightning.strategies import DDPStrategy, DeepSpeedStrategy
 from pytorch_lightning.plugins.environments import MPIEnvironment
 from pytorch_lightning import seed_everything
 import torch
+torch.autograd.set_detect_anomaly(True) #just for debugging to be removed
+
 import wandb
 from deepspeed.utils import zero_to_fp32 
 
@@ -282,6 +284,7 @@ def get_model_state_dict_from_ds_checkpoint(checkpoint_dir):
     return torch.load(state_file)
 
 def main(args):
+
     if(args.seed is not None):
         seed_everything(args.seed, workers=True) 
 

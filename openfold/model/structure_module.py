@@ -398,7 +398,8 @@ class InvariantPointAttention(nn.Module):
             )
 
         a *= math.sqrt(1.0 / (3 * self.c_hidden))
-        a += (math.sqrt(1.0 / 3) * permute_final_dims(b, (2, 0, 1)))
+        # a += (math.sqrt(1.0 / 3) * permute_final_dims(b, (2, 0, 1)))
+        a += (math.sqrt(1.0 / 3) * permute_final_dims(b, (2, 0, 1))).squeeze(0)
 
         # [*, N_res, N_res, H, P_q, 3]
         pt_att = q_pts.unsqueeze(-4) - k_pts.unsqueeze(-5)
@@ -497,13 +498,23 @@ class InvariantPointAttention(nn.Module):
         # [*, N_res, H * C_z]
         o_pair = flatten_final_dims(o_pair, 2)
 
+        # Remove the batch dimension from o_pair
+        o_pair = o_pair.squeeze(0)
+
+        print(f"o shape: {o.shape}")
+        print(f"o_pt shapes: {[pt.shape for pt in o_pt]}")
+        print(f"o_pt_norm shape: {o_pt_norm.shape}")
+        print(f"o_pair shape: {o_pair.shape}")
+        
+        
         # [*, N_res, C_s]
         s = self.linear_out(
             torch.cat(
                 (o, *o_pt, o_pt_norm, o_pair), dim=-1
             ).to(dtype=z[0].dtype)
         )
-
+        
+        
         return s
 
 

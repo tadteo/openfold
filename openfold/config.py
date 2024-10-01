@@ -3,6 +3,7 @@ import copy
 import importlib
 import ml_collections as mlc
 
+number_of_layers_in_evoformer=12 #48 #12
 
 def set_inf(c, inf):
     for k, v in c.items():
@@ -455,7 +456,7 @@ config = mlc.ConfigDict(
             "data_module": {
                 "use_small_bfd": False,
                 "data_loaders": {
-                    "batch_size": 1,
+                    "batch_size": 1, #4,
                     "num_workers": 16,
                     "pin_memory": True,
                 },
@@ -484,7 +485,7 @@ config = mlc.ConfigDict(
             "eps": eps,
             "is_multimer": False,
             "seqemb_mode_enabled": False, # Global flag for enabling seq emb mode
-            "evoformer_type" : "MambaEvoformer",  # or "MambaEvoformer" or "Evoformer"
+            "evoformer_type" : "Evoformer",  # or "MambaEvoformer" or "Evoformer"
         },
         "model": {
             "_mask_trans": False,
@@ -598,7 +599,7 @@ config = mlc.ConfigDict(
                 "c_s": c_s,
                 "no_heads_msa": 8,
                 "no_heads_pair": 4,
-                "no_blocks": 48,
+                "no_blocks": number_of_layers_in_evoformer, # 48,
                 "transition_n": 4,
                 "msa_dropout": 0.15,
                 "pair_dropout": 0.25,
@@ -621,7 +622,7 @@ config = mlc.ConfigDict(
                 "c_s": c_s,
                 "no_heads_msa": 8,
                 "no_heads_pair": 4,
-                "no_blocks": 48,
+                "no_blocks": number_of_layers_in_evoformer, #48,
                 "transition_n": 4,
                 "msa_dropout": 0.15,
                 "pair_dropout": 0.25,

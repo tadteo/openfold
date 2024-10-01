@@ -9,8 +9,8 @@ dependencies:
   - libgcc
   - setuptools
   - pip
-  - openmm
-  - pdbfixer
+  - openmm==8.0.0
+  - pdbfixer==1.9
   - biopython
   - numpy<2
   - pandas
@@ -39,6 +39,6 @@ dependencies:
       - git+https://github.com/NVIDIA/dllogger.git
       - lightning
       - mpi4py
-      - mamba-ssm
       - causal-conv1d>=1.4.0
+      - mamba-ssm
       # - flash-attn

@@ -13,10 +13,13 @@ from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.strategies import DDPStrategy, DeepSpeedStrategy
 from pytorch_lightning.plugins.environments import MPIEnvironment
 from pytorch_lightning import seed_everything
+from pytorch_lightning.utilities.model_summary import summarize
+
 import torch
-torch.autograd.set_detect_anomaly(True) #just for debugging to be removed
+from nan_detector import NaNDetector
 
 import wandb
+wandb.finish()
 from deepspeed.utils import zero_to_fp32 
 
 from openfold.config import model_config
@@ -51,9 +54,16 @@ class OpenFoldWrapper(pl.LightningModule):
         super(OpenFoldWrapper, self).__init__()
         self.config = config
         self.model = AlphaFold(config)
-        self.is_multimer = self.config.globals.is_multimer
-
         self.loss = AlphaFoldLoss(config.loss)
+        
+        # Enable anomaly detection
+        torch.autograd.set_detect_anomaly(True)
+        
+        # Add hooks for gradient tracking
+        for name, param in self.model.named_parameters():
+            param.register_hook(lambda grad, name=name: self._gradient_hook(grad, name))
+
+        self.is_multimer = self.config.globals.is_multimer
 
         self.ema = ExponentialMovingAverage(
             model=self.model, decay=config.ema.decay
@@ -68,19 +78,23 @@ class OpenFoldWrapper(pl.LightningModule):
 
     def _log(self, loss_breakdown, batch, outputs, train=True):
         phase = "train" if train else "val"
+        batch_size = batch["aatype"].shape[0]  # Assuming aatype is always present
+
         for loss_name, indiv_loss in loss_breakdown.items():
             self.log(
                 f"{phase}/{loss_name}", 
                 indiv_loss, 
                 prog_bar=(loss_name == 'loss'),
-                on_step=train, on_epoch=(not train), logger=True, sync_dist=False,
+                on_step=train, on_epoch=(not train), logger=True, sync_dist=True,
+                batch_size=batch_size
             )
 
-            if(train):
+            if train:
                 self.log(
                     f"{phase}/{loss_name}_epoch",
                     indiv_loss,
-                    on_step=False, on_epoch=True, logger=True, sync_dist=False,
+                    on_step=False, on_epoch=True, logger=True, sync_dist=True,
+                    batch_size=batch_size
                 )
 
         with torch.no_grad():
@@ -90,16 +104,17 @@ class OpenFoldWrapper(pl.LightningModule):
                 superimposition_metrics=(not train)
             )
 
-        for k,v in other_metrics.items():
+        for k, v in other_metrics.items():
             self.log(
                 f"{phase}/{k}",
                 torch.mean(v),
-                prog_bar = (k == 'loss'),
-                on_step=False, on_epoch=True, logger=True, sync_dist=False,
+                prog_bar=(k == 'loss'),
+                on_step=False, on_epoch=True, logger=True, sync_dist=True,
+                batch_size=batch_size
             )
 
     def training_step(self, batch, batch_idx):
-        if(self.ema.device != batch["aatype"].device):
+        if self.ema.device != batch["aatype"].device:
             self.ema.to(batch["aatype"].device)
 
         ground_truth = batch.pop('gt_features', None)
@@ -122,6 +137,11 @@ class OpenFoldWrapper(pl.LightningModule):
 
         # Log it
         self._log(loss_breakdown, batch, outputs)
+
+        # Log the total loss explicitly with batch size
+        self.log('train_loss', loss, on_step=True, on_epoch=True, 
+                 prog_bar=True, logger=True, sync_dist=True,
+                 batch_size=batch["aatype"].shape[0])
 
         return loss
 
@@ -218,7 +238,7 @@ class OpenFoldWrapper(pl.LightningModule):
         return metrics
 
     def configure_optimizers(self, 
-        learning_rate: float = 1e-3,
+        learning_rate: float = 1e-4, #1e-3,
         eps: float = 1e-5,
     ) -> torch.optim.Adam:
         # Ignored as long as a DeepSpeed optimizer is configured
@@ -270,6 +290,18 @@ class OpenFoldWrapper(pl.LightningModule):
                 self.model, jax_path, version=model_version
         )
 
+    def setup(self, stage):
+        for name, param in self.model.named_parameters():
+            param.register_hook(lambda grad, name=name: self._gradient_hook(grad, name))
+
+    def _gradient_hook(self, grad, name):
+        if torch.isnan(grad).any():
+            print(f"NaN gradient detected in {name}")
+        norm = torch.norm(grad)
+        # if norm > 1:
+        #     print(f"Large gradient norm ({norm:.2f}) detected in {name}")
+        return grad
+
 def get_model_state_dict_from_ds_checkpoint(checkpoint_dir):
     latest_path = os.path.join(checkpoint_dir, 'latest')
     if os.path.isfile(latest_path):
@@ -302,7 +334,8 @@ def main(args):
         config.update_from_flattened_dict(custom_config_dict)
 
     model_module = OpenFoldWrapper(config)
-
+    print(summarize(model_module, max_depth=3))
+    
     if args.resume_from_ckpt:
         if args.resume_model_weights_only:
             # Load the checkpoint
@@ -358,13 +391,20 @@ def main(args):
     data_module.setup()
     
     callbacks = []
+    callbacks.append(NaNDetector())
     if(args.checkpoint_every_epoch):
+        # Create a timestamp for the checkpoint directory
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # Create the checkpoint directory path
+        checkpoint_dir = os.path.join(args.output_dir, f"checkpoints_{timestamp}")
+        
         mc = ModelCheckpoint(
-            every_n_epochs=1,
+            every_n_epochs=5,
             auto_insert_metric_name=False,
             save_top_k=-1,
-            filename=f'{run_desc}-epoch={{epoch}}-step={{step}}-{datetime.timestamp}-{{val_lddt_ca:.2f}}',
-            dirpath='checkpoints',
+            filename=f'{run_desc}-epoch={{epoch}}-step={{step}}-{{val_lddt_ca:.2f}}',
+            dirpath=checkpoint_dir,
         )
         callbacks.append(mc)
 
@@ -430,24 +470,31 @@ def main(args):
             wdb_logger.experiment.save(args.deepspeed_config_path)
             wdb_logger.experiment.save("openfold/config.py")
     elif (args.gpus is not None and args.gpus > 1) or args.num_nodes > 1:
-        strategy = DDPStrategy(find_unused_parameters=False,
+        strategy = DDPStrategy(find_unused_parameters=True,
                                cluster_environment=cluster_environment)
-    else:
-        strategy = None
- 
+    
     if(args.wandb and is_rank_zero):
         freeze_path = f"{wdb_logger.experiment.dir}/package_versions.txt"
         os.system(f"{sys.executable} -m pip freeze > {freeze_path}")
         wdb_logger.experiment.save(f"{freeze_path}")
 
-    trainer_kws = ['num_nodes', 'precision', 'max_epochs', 'log_every_n_steps',
+    # Set float32 matmul precision
+    torch.set_float32_matmul_precision('high')
+
+    # Update the precision setting
+    if args.precision == 'bf16':
+        args.precision = 'bf16-mixed'
+
+    trainer_kws = ['num_nodes', 'max_epochs', 'log_every_n_steps',
                    'flush_logs_ever_n_steps', 'num_sanity_val_steps', 'reload_dataloaders_every_n_epochs']
     trainer_args = {k: v for k, v in vars(args).items() if k in trainer_kws}
     trainer_args.update({
         'default_root_dir': args.output_dir,
-        'strategy': strategy,
         'callbacks': callbacks,
         'logger': loggers,
+        'precision': args.precision,
+        'accelerator': 'gpu',
+        'devices': args.gpus if args.gpus is not None else 1,
     })
     trainer = pl.Trainer(**trainer_args)
 
@@ -677,7 +724,7 @@ if __name__ == "__main__":
         "--num_nodes", type=int, default=1,
     )
     trainer_group.add_argument(
-        "--precision", type=str, default='bf16',
+        "--precision", type=str, default='bf16-mixed',
         help='Sets precision, lower precision improves runtime performance.',
     )
     trainer_group.add_argument(

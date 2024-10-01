@@ -272,6 +272,11 @@ def _attention(query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, bias
     a = torch.matmul(query, key)
 
     for b in biases:
+        #added to fix inference batch extra dimension issue
+        if b.dim() == a.dim() + 1:
+            b = b.squeeze(0)
+        elif b.dim() == a.dim() - 1:
+            b = b.unsqueeze(0)
         a += b
 
     a = softmax_no_cast(a, -1)

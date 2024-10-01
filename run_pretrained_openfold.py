@@ -54,6 +54,8 @@ from openfold.utils.trace_utils import (
 from scripts.precompute_embeddings import EmbeddingGenerator
 from scripts.utils import add_data_args
 
+from torchinfo import summary
+
 
 TRACING_INTERVAL = 50
 
@@ -382,6 +384,9 @@ def main(args):
                     pickle.dump(out, fp, protocol=pickle.HIGHEST_PROTOCOL)
 
                 logger.info(f"Model output written to {output_dict_path}...")
+
+        # After model initialization
+        summary(model, input_size=(batch_size, seq_length, input_dim))
 
 
 if __name__ == "__main__":

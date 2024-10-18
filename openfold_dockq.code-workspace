@@ -1,0 +1,20 @@
+{
+	"folders": [
+		{
+			"name": "openfold_dockq",
+			"path": "."
+		},
+		{
+			"name": "DockQ",
+			"path": "../DockQ"
+		},
+		{
+			"name": "phd_utils",
+			"path": "../phd_utils"
+		},
+		{
+			"name": "logs",
+			"path": "../logs"
+		}
+	]
+}

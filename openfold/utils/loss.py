@@ -28,6 +28,13 @@ from openfold.utils.tensor_utils import (
     masked_mean,
     permute_final_dims,
 )
+
+#dockQ modules
+from DockQ.core.scoring import calc_DockQ, dockq_formula
+from DockQ.io.pdb_loader import load_PDB
+from DockQ.core.structure import Structure
+from DockQ.utils.helpers import get_residue_distances, get_interacting_pairs, subset_atoms
+
 import logging
 from openfold.utils.tensor_utils import tensor_tree_map
 
@@ -1681,6 +1688,42 @@ def chain_center_of_mass_loss(
     loss = masked_mean(loss_mask, losses, dim=(-1, -2))
     return loss
 
+def calculate_true_dockq(self, pred_frames, gt_frames, batch):
+        # Convert frames to atom positions
+        pred_positions = frames_and_literature_positions_to_atom14_pos(
+            pred_frames,
+            batch['aatype'],
+        )
+        gt_positions = frames_and_literature_positions_to_atom14_pos(
+            gt_frames,
+            batch['aatype'],
+        )
+
+        # Calculate iRMSD, LRMSD, and fnat
+        irmsd = self.calculate_irmsd(pred_positions, gt_positions, batch)
+        lrmsd = self.calculate_lrmsd(pred_positions, gt_positions, batch)
+        fnat = self.calculate_fnat(pred_positions, gt_positions, batch)
+
+        # Calculate DockQ score
+        dockq_score = DockQ(irmsd, lrmsd, fnat)
+
+        return dockq_score
+
+# def calculate_irmsd(self, pred_positions, gt_positions, batch):
+#     # Implement iRMSD calculation
+#     # This is a placeholder and needs to be implemented based on your specific requirements
+#     return torch.tensor(0.0)
+
+# def calculate_lrmsd(self, pred_positions, gt_positions, batch):
+#     # Implement LRMSD calculation
+#     # This is a placeholder and needs to be implemented based on your specific requirements
+#     return torch.tensor(0.0)
+
+# def calculate_fnat(self, pred_positions, gt_positions, batch):
+#     # Implement fnat calculation
+#     # This is a placeholder and needs to be implemented based on your specific requirements
+#     return torch.tensor(0.0)
+
 
 class AlphaFoldLoss(nn.Module):
     """Aggregation of the various losses described in the supplement"""
@@ -1689,6 +1732,26 @@ class AlphaFoldLoss(nn.Module):
         super(AlphaFoldLoss, self).__init__()
         self.config = config
 
+    def calculate_dockq(self, pred_positions, gt_positions, batch):
+        # Check if we have multiple chains
+        if 'asym_id' in batch and len(torch.unique(batch['asym_id'])) > 1:
+            # Convert predicted and ground truth positions to Structure objects
+            pred_structure = Structure(pred_positions.detach().cpu().numpy())
+            gt_structure = Structure(gt_positions.detach().cpu().numpy())
+
+            # Calculate DockQ score
+            dockq_info = calc_DockQ(
+                (pred_structure[0], pred_structure[1]),
+                (gt_structure[0], gt_structure[1]),
+                alignments=(None, None),
+                capri_peptide=False,
+                low_memory=True
+            )
+            return dockq_info['DockQ']
+        else:
+            # Return None for single-chain proteins
+            return None
+    
     def loss(self, out, batch, _return_breakdown=False):
         """
         Rename previous forward() as loss()
@@ -1709,6 +1772,11 @@ class AlphaFoldLoss(nn.Module):
                 )
             )
 
+        # Calculate DockQ score
+        pred_positions = out["final_atom_positions"]
+        gt_positions = batch["all_atom_positions"]
+        dockq_score = self.calculate_dockq(pred_positions, gt_positions, batch)
+        
         loss_fns = {
             "distogram": lambda: distogram_loss(
                 logits=out["distogram_logits"],
@@ -1741,6 +1809,23 @@ class AlphaFoldLoss(nn.Module):
                 out["violation"],
                 **{**batch, **self.config.violation},
             ),
+            "dockq": lambda: F.mse_loss(
+                out["dockq"],
+                torch.tensor(dockq_score, device=out["dockq"].device),
+            ) if dockq_score is not None else torch.tensor(0.0, device=out["dockq"].device),
+            #For DockQ components
+            # "irmsd": lambda: F.mse_loss(
+            #     out["irmsd"],
+            #     batch["irmsd"],
+            # ),
+            # "lrmsd": lambda: F.mse_loss(
+            #     out["lrmsd"],
+            #     batch["lrmsd"],
+            # ),
+            # "fnat": lambda: F.mse_loss(
+            #     out["fnat"],
+            #     batch["fnat"],
+            # ),
         }
 
         if self.config.tm.enabled:
@@ -1769,6 +1854,7 @@ class AlphaFoldLoss(nn.Module):
                 loss = loss.new_tensor(0., requires_grad=True)
             cum_loss = cum_loss + weight * loss
             losses[loss_name] = loss.detach().clone()
+
         losses["unscaled_loss"] = cum_loss.detach().clone()
 
         # Scale the loss by the square root of the minimum of the crop size and

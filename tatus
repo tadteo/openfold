@@ -1,0 +1,353 @@
+[1mdiff --git a/openfold/config.py b/openfold/config.py[m
+[1mindex 7bf30e3..49297e5 100644[m
+[1m--- a/openfold/config.py[m
+[1m+++ b/openfold/config.py[m
+[36m@@ -255,6 +255,11 @@[m [mdef model_config([m
+         # a global constant[m
+         set_inf(c, 1e4)[m
+ [m
+[32m+[m[32m    # Add DockQ configuration[m
+[32m+[m[32m    if "dockq" not in c.loss:[m
+[32m+[m[32m        c.loss.dockq = mlc.ConfigDict()[m
+[32m+[m[32m    c.loss.dockq.weight = 0.25[m
+[32m+[m
+     enforce_config_constraints(c)[m
+ [m
+     return c[m
+[36m@@ -650,6 +655,18 @@[m [mconfig = mlc.ConfigDict([m
+                     "c_s": c_s,[m
+                     "c_out": 37,[m
+                 },[m
+[32m+[m[32m                "dockq": {[m
+[32m+[m[32m                    "c_in": c_s,[m
+[32m+[m[32m                },[m
+[32m+[m[32m                "dockq_iRMSD": {[m
+[32m+[m[32m                    "c_in": c_s,[m
+[32m+[m[32m                },[m
+[32m+[m[32m                "dockq_LRMSD": {[m
+[32m+[m[32m                    "c_in": c_s,[m
+[32m+[m[32m                },[m
+[32m+[m[32m                "dockq_fnat": {[m
+[32m+[m[32m                    "c_in": c_s,[m
+[32m+[m[32m                },[m
+             },[m
+             # A negative value indicates that no early stopping will occur, i.e.[m
+             # the model will always run `max_recycling_iters` number of recycling[m
+[36m@@ -728,6 +745,9 @@[m [mconfig = mlc.ConfigDict([m
+                 "weight": 0.,[m
+                 "enabled": tm_enabled,[m
+             },[m
+[32m+[m[32m            "dockq": {[m
+[32m+[m[32m                "weight": 0.25,[m
+[32m+[m[32m            },[m
+             "chain_center_of_mass": {[m
+                 "clamp_distance": -4.0,[m
+                 "weight": 0.,[m
+[1mdiff --git a/openfold/model/heads.py b/openfold/model/heads.py[m
+[1mindex 459dce9..8d05f8f 100644[m
+[1m--- a/openfold/model/heads.py[m
+[1m+++ b/openfold/model/heads.py[m
+[36m@@ -50,6 +50,20 @@[m [mclass AuxiliaryHeads(nn.Module):[m
+                 **config.tm,[m
+             )[m
+ [m
+[32m+[m[32m        # Add new heads for dockq components[m
+[32m+[m[32m        self.dockq = DockQHead([m
+[32m+[m[32m            **config["dockq"],[m
+[32m+[m[32m        )[m
+[32m+[m[32m        # self.dockq_iRMSD = DockQComponentHead([m
+[32m+[m[32m        #     **config["dockq_iRMSD"],[m
+[32m+[m[32m        # )[m
+[32m+[m[32m        # self.dockq_LRMSD = DockQComponentHead([m
+[32m+[m[32m        #     **config["dockq_LRMSD"],[m
+[32m+[m[32m        # )[m
+[32m+[m[32m        # self.dockq_fnat = DockQComponentHead([m
+[32m+[m[32m        #     **config["dockq_fnat"],[m
+[32m+[m[32m        # )[m
+[32m+[m
+         self.config = config[m
+ [m
+     def forward(self, outputs):[m
+[36m@@ -94,6 +108,12 @@[m [mclass AuxiliaryHeads(nn.Module):[m
+                 )[m
+             )[m
+ [m
+[32m+[m[32m        # Add predictions for dockq components[m
+[32m+[m[32m        aux_out["dockq"] = self.dockq(outputs["single"])[m
+[32m+[m[32m        # aux_out["dockq_iRMSD"] = self.dockq_component1(outputs["single"])[m
+[32m+[m[32m        # aux_out["dockq_LRMSD"] = self.dockq_component2(outputs["single"])[m
+[32m+[m[32m        # aux_out["dockq_fnat"] = self.dockq_component3(outputs["single"])[m
+[32m+[m
+         return aux_out[m
+ [m
+ [m
+[36m@@ -265,3 +285,61 @@[m [mclass ExperimentallyResolvedHead(nn.Module):[m
+         # [*, N, C_out][m
+         logits = self.linear(s)[m
+         return logits[m
+[32m+[m
+[32m+[m
+[32m+[m[32mclass DockQHead(nn.Module):[m
+[32m+[m[32m    """[m
+[32m+[m[32m    For use in computation of dockq loss[m
+[32m+[m[32m    """[m
+[32m+[m
+[32m+[m[32m    def __init__(self, c_z, **kwargs):[m
+[32m+[m[32m        """[m
+[32m+[m[32m        Args:[m
+[32m+[m[32m            c_z:[m
+[32m+[m[32m                Input channel dimension[m
+[32m+[m[32m        """[m
+[32m+[m[32m        super(DockQHead, self).__init__()[m
+[32m+[m[32m        self.linear = Linear(c_in, 128)  # An intermediate layer[m
+[32m+[m[32m        self.final = Linear(128, 1)[m
+[32m+[m
+[32m+[m[32m    def forward(self, z):[m
+[32m+[m[32m        """[m
+[32m+[m[32m        Args:[m
+[32m+[m[32m            z:[m
+[32m+[m[32m                [*, N_res, N_res, C_z] pairwise embedding[m
+[32m+[m[32m        Returns:[m
+[32m+[m[32m            [*] prediction (a single DockQ score)[m
+[32m+[m[32m        """[m
+[32m+[m[32m        # Apply linear layer[m
+[32m+[m[32m        x = self.linear(z)[m
+[32m+[m[32m        x = F.relu(x)[m
+[32m+[m[32m        x = self.final(x)[m
+[32m+[m[32m        x = torch.mean(x, dim=-2)[m[41m [m
+[32m+[m[41m        [m
+[32m+[m[32m        # Apply sigmoid to constrain output between 0 and 1[m
+[32m+[m[32m        return torch.sigmoid(x)[m
+[32m+[m
+[32m+[m
+[32m+[m[32m# class DockQComponentHead(nn.Module):[m
+[32m+[m[32m#     """[m
+[32m+[m[32m#     For use in computation of dockq component loss[m
+[32m+[m[32m#     """[m
+[32m+[m
+[32m+[m[32m#     def __init__(self, c_in, **kwargs):[m
+[32m+[m[32m#         """[m
+[32m+[m[32m#         Args:[m
+[32m+[m[32m#             c_in:[m
+[32m+[m[32m#                 Input channel dimension[m
+[32m+[m[32m#         """[m
+[32m+[m[32m#         super(DockQComponentHead, self).__init__()[m
+[32m+[m[32m#         self.linear = Linear(c_in, 1, init="final")[m
+[32m+[m
+[32m+[m[32m#     def forward(self, s):[m
+[32m+[m[32m#         """[m
+[32m+[m[32m#         Args:[m
+[32m+[m[32m#             s:[m
+[32m+[m[32m#                 [*, N_res, C_in] single embedding[m
+[32m+[m[32m#         Returns:[m
+[32m+[m[32m#             [*, N_res, 1] prediction[m
+[32m+[m[32m#         """[m
+[32m+[m[32m#         return self.linear(s)[m
+[1mdiff --git a/openfold/utils/loss.py b/openfold/utils/loss.py[m
+[1mindex 395e347..a4c6435 100644[m
+[1m--- a/openfold/utils/loss.py[m
+[1m+++ b/openfold/utils/loss.py[m
+[36m@@ -28,6 +28,13 @@[m [mfrom openfold.utils.tensor_utils import ([m
+     masked_mean,[m
+     permute_final_dims,[m
+ )[m
+[32m+[m
+[32m+[m[32m#dockQ modules[m
+[32m+[m[32mfrom DockQ.core.scoring import calc_DockQ, dockq_formula[m
+[32m+[m[32mfrom DockQ.io.pdb_loader import load_PDB[m
+[32m+[m[32mfrom DockQ.core.structure import Structure[m
+[32m+[m[32mfrom DockQ.utils.helpers import get_residue_distances, get_interacting_pairs, subset_atoms[m
+[32m+[m
+ import logging[m
+ from openfold.utils.tensor_utils import tensor_tree_map[m
+ [m
+[36m@@ -1681,6 +1688,42 @@[m [mdef chain_center_of_mass_loss([m
+     loss = masked_mean(loss_mask, losses, dim=(-1, -2))[m
+     return loss[m
+ [m
+[32m+[m[32mdef calculate_true_dockq(self, pred_frames, gt_frames, batch):[m
+[32m+[m[32m        # Convert frames to atom positions[m
+[32m+[m[32m        pred_positions = frames_and_literature_positions_to_atom14_pos([m
+[32m+[m[32m            pred_frames,[m
+[32m+[m[32m            batch['aatype'],[m
+[32m+[m[32m        )[m
+[32m+[m[32m        gt_positions = frames_and_literature_positions_to_atom14_pos([m
+[32m+[m[32m            gt_frames,[m
+[32m+[m[32m            batch['aatype'],[m
+[32m+[m[32m        )[m
+[32m+[m
+[32m+[m[32m        # Calculate iRMSD, LRMSD, and fnat[m
+[32m+[m[32m        irmsd = self.calculate_irmsd(pred_positions, gt_positions, batch)[m
+[32m+[m[32m        lrmsd = self.calculate_lrmsd(pred_positions, gt_positions, batch)[m
+[32m+[m[32m        fnat = self.calculate_fnat(pred_positions, gt_positions, batch)[m
+[32m+[m
+[32m+[m[32m        # Calculate DockQ score[m
+[32m+[m[32m        dockq_score = DockQ(irmsd, lrmsd, fnat)[m
+[32m+[m
+[32m+[m[32m        return dockq_score[m
+[32m+[m
+[32m+[m[32m# def calculate_irmsd(self, pred_positions, gt_positions, batch):[m
+[32m+[m[32m#     # Implement iRMSD calculation[m
+[32m+[m[32m#     # This is a placeholder and needs to be implemented based on your specific requirements[m
+[32m+[m[32m#     return torch.tensor(0.0)[m
+[32m+[m
+[32m+[m[32m# def calculate_lrmsd(self, pred_positions, gt_positions, batch):[m
+[32m+[m[32m#     # Implement LRMSD calculation[m
+[32m+[m[32m#     # This is a placeholder and needs to be implemented based on your specific requirements[m
+[32m+[m[32m#     return torch.tensor(0.0)[m
+[32m+[m
+[32m+[m[32m# def calculate_fnat(self, pred_positions, gt_positions, batch):[m
+[32m+[m[32m#     # Implement fnat calculation[m
+[32m+[m[32m#     # This is a placeholder and needs to be implemented based on your specific requirements[m
+[32m+[m[32m#     return torch.tensor(0.0)[m
+[32m+[m
+ [m
+ class AlphaFoldLoss(nn.Module):[m
+     """Aggregation of the various losses described in the supplement"""[m
+[36m@@ -1689,6 +1732,26 @@[m [mclass AlphaFoldLoss(nn.Module):[m
+         super(AlphaFoldLoss, self).__init__()[m
+         self.config = config[m
+ [m
+[32m+[m[32m    def calculate_dockq(self, pred_positions, gt_positions, batch):[m
+[32m+[m[32m        # Check if we have multiple chains[m
+[32m+[m[32m        if 'asym_id' in batch and len(torch.unique(batch['asym_id'])) > 1:[m
+[32m+[m[32m            # Convert predicted and ground truth positions to Structure objects[m
+[32m+[m[32m            pred_structure = Structure(pred_positions.detach().cpu().numpy())[m
+[32m+[m[32m            gt_structure = Structure(gt_positions.detach().cpu().numpy())[m
+[32m+[m
+[32m+[m[32m            # Calculate DockQ score[m
+[32m+[m[32m            dockq_info = calc_DockQ([m
+[32m+[m[32m                (pred_structure[0], pred_structure[1]),[m
+[32m+[m[32m                (gt_structure[0], gt_structure[1]),[m
+[32m+[m[32m                alignments=(None, None),[m
+[32m+[m[32m                capri_peptide=False,[m
+[32m+[m[32m                low_memory=True[m
+[32m+[m[32m            )[m
+[32m+[m[32m            return dockq_info['DockQ'][m
+[32m+[m[32m        else:[m
+[32m+[m[32m            # Return None for single-chain proteins[m
+[32m+[m[32m            return None[m
+[32m+[m[41m    [m
+     def loss(self, out, batch, _return_breakdown=False):[m
+         """[m
+         Rename previous forward() as loss()[m
+[36m@@ -1709,6 +1772,11 @@[m [mclass AlphaFoldLoss(nn.Module):[m
+                 )[m
+             )[m
+ [m
+[32m+[m[32m        # Calculate DockQ score[m
+[32m+[m[32m        pred_positions = out["final_atom_positions"][m
+[32m+[m[32m        gt_positions = batch["all_atom_positions"][m
+[32m+[m[32m        dockq_score = self.calculate_dockq(pred_positions, gt_positions, batch)[m
+[32m+[m[41m        [m
+         loss_fns = {[m
+             "distogram": lambda: distogram_loss([m
+                 logits=out["distogram_logits"],[m
+[36m@@ -1741,6 +1809,23 @@[m [mclass AlphaFoldLoss(nn.Module):[m
+                 out["violation"],[m
+                 **{**batch, **self.config.violation},[m
+             ),[m
+[32m+[m[32m            "dockq": lambda: F.mse_loss([m
+[32m+[m[32m                out["dockq"],[m
+[32m+[m[32m                torch.tensor(dockq_score, device=out["dockq"].device),[m
+[32m+[m[32m            ) if dockq_score is not None else torch.tensor(0.0, device=out["dockq"].device),[m
+[32m+[m[32m            #For DockQ components[m
+[32m+[m[32m            # "irmsd": lambda: F.mse_loss([m
+[32m+[m[32m            #     out["irmsd"],[m
+[32m+[m[32m            #     batch["irmsd"],[m
+[32m+[m[32m            # ),[m
+[32m+[m[32m            # "lrmsd": lambda: F.mse_loss([m
+[32m+[m[32m            #     out["lrmsd"],[m
+[32m+[m[32m            #     batch["lrmsd"],[m
+[32m+[m[32m            # ),[m
+[32m+[m[32m            # "fnat": lambda: F.mse_loss([m
+[32m+[m[32m            #     out["fnat"],[m
+[32m+[m[32m            #     batch["fnat"],[m
+[32m+[m[32m            # ),[m
+         }[m
+ [m
+         if self.config.tm.enabled:[m
+[36m@@ -1769,6 +1854,7 @@[m [mclass AlphaFoldLoss(nn.Module):[m
+                 loss = loss.new_tensor(0., requires_grad=True)[m
+             cum_loss = cum_loss + weight * loss[m
+             losses[loss_name] = loss.detach().clone()[m
+[32m+[m
+         losses["unscaled_loss"] = cum_loss.detach().clone()[m
+ [m
+         # Scale the loss by the square root of the minimum of the crop size and[m
+[1mdiff --git a/train_openfold.py b/train_openfold.py[m
+[1mindex 3fa0cee..4dcf3d8 100644[m
+[1m--- a/train_openfold.py[m
+[1m+++ b/train_openfold.py[m
+[36m@@ -57,10 +57,20 @@[m [mclass OpenFoldWrapper(pl.LightningModule):[m
+             model=self.model, decay=config.ema.decay[m
+         )[m
+         [m
+[32m+[m[32m        if self.config.train_dockq_head_only:[m
+[32m+[m[32m            self._freeze_main_network()[m
+[32m+[m
+         self.cached_weights = None[m
+         self.last_lr_step = -1[m
+         self.save_hyperparameters()[m
+ [m
+[32m+[m[32m    def _freeze_main_network(self):[m
+[32m+[m[32m        for param in self.model.parameters():[m
+[32m+[m[32m            param.requires_grad = False[m
+[32m+[m[32m        # Unfreeze the DockQ head[m
+[32m+[m[32m        for param in self.model.auxiliary_heads.dockq.parameters():[m
+[32m+[m[32m            param.requires_grad = True[m
+[32m+[m
+     def forward(self, batch):[m
+         return self.model(batch)[m
+ [m
+[36m@@ -220,11 +230,21 @@[m [mclass OpenFoldWrapper(pl.LightningModule):[m
+         eps: float = 1e-5,[m
+     ) -> torch.optim.Adam:[m
+         # Ignored as long as a DeepSpeed optimizer is configured[m
+[31m-        optimizer = torch.optim.Adam([m
+[32m+[m[32m        if self.config.train_dockq_head_only:[m
+[32m+[m[32m            # Only optimize the DockQ head parameters[m
+[32m+[m[32m            params = self.model.auxiliary_heads.dockq.parameters()[m
+[32m+[m[32m            optimizer = torch.optim.Adam(params, lr=learning_rate, eps=eps)[m
+[32m+[m[32m        else:[m
+[32m+[m[32m            params = self.model.parameters()[m
+[32m+[m[32m            optimizer = torch.optim.Adam([m
+             self.model.parameters(), [m
+             lr=learning_rate, [m
+             eps=eps[m
+[31m-        )[m
+[32m+[m[32m            )[m
+[32m+[m
+[32m+[m[41m        [m
+[32m+[m[41m        [m
+[32m+[m[41m        [m
+ [m
+         if self.last_lr_step != -1:[m
+             for group in optimizer.param_groups:[m
+[36m@@ -298,7 +318,7 @@[m [mdef main(args):[m
+             custom_config_dict = json.load(f)[m
+         config.update_from_flattened_dict(custom_config_dict)[m
+ [m
+[31m-    model_module = OpenFoldWrapper(config)[m
+[32m+[m[32m    model_module = OpenFoldWrapper(config, train_dockq_head_only=args.train_dockq_head_only)[m
+ [m
+     if args.resume_from_ckpt:[m
+         if args.resume_model_weights_only:[m
+[36m@@ -427,7 +447,7 @@[m [mdef main(args):[m
+             wdb_logger.experiment.save(args.deepspeed_config_path)[m
+             wdb_logger.experiment.save("openfold/config.py")[m
+     elif (args.gpus is not None and args.gpus > 1) or args.num_nodes > 1:[m
+[31m-        strategy = DDPStrategy(find_unused_parameters=False,[m
+[32m+[m[32m        strategy = DDPStrategy(find_unused_parameters=True,[m
+                                cluster_environment=cluster_environment)[m
+     else:[m
+         strategy = None[m
+[36m@@ -662,6 +682,8 @@[m [mif __name__ == "__main__":[m
+     )[m
+     parser.add_argument("--mpi_plugin", action="store_true", default=False,[m
+                         help="Whether to use MPI for parallele processing")[m
+[32m+[m[32m    parser.add_argument("--train_dockq_head_only", action="store_true", default=False,[m
+[32m+[m[32m                        help="Train only the DockQ head, freezing the rest of the network")[m
+ [m
+     trainer_group = parser.add_argument_group([m
+         'Arguments to pass to PyTorch Lightning Trainer')[m

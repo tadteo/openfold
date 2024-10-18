@@ -57,9 +57,19 @@ class OpenFoldWrapper(pl.LightningModule):
             model=self.model, decay=config.ema.decay
         )
         
+        if self.config.train_dockq_head_only:
+            self._freeze_main_network()
+
         self.cached_weights = None
         self.last_lr_step = -1
         self.save_hyperparameters()
+
+    def _freeze_main_network(self):
+        for param in self.model.parameters():
+            param.requires_grad = False
+        # Unfreeze the DockQ head
+        for param in self.model.auxiliary_heads.dockq.parameters():
+            param.requires_grad = True
 
     def forward(self, batch):
         return self.model(batch)
@@ -220,11 +230,21 @@ class OpenFoldWrapper(pl.LightningModule):
         eps: float = 1e-5,
     ) -> torch.optim.Adam:
         # Ignored as long as a DeepSpeed optimizer is configured
-        optimizer = torch.optim.Adam(
+        if self.config.train_dockq_head_only:
+            # Only optimize the DockQ head parameters
+            params = self.model.auxiliary_heads.dockq.parameters()
+            optimizer = torch.optim.Adam(params, lr=learning_rate, eps=eps)
+        else:
+            params = self.model.parameters()
+            optimizer = torch.optim.Adam(
             self.model.parameters(), 
             lr=learning_rate, 
             eps=eps
-        )
+            )
+
+        
+        
+        
 
         if self.last_lr_step != -1:
             for group in optimizer.param_groups:
@@ -298,7 +318,7 @@ def main(args):
             custom_config_dict = json.load(f)
         config.update_from_flattened_dict(custom_config_dict)
 
-    model_module = OpenFoldWrapper(config)
+    model_module = OpenFoldWrapper(config, train_dockq_head_only=args.train_dockq_head_only)
 
     if args.resume_from_ckpt:
         if args.resume_model_weights_only:
@@ -427,7 +447,7 @@ def main(args):
             wdb_logger.experiment.save(args.deepspeed_config_path)
             wdb_logger.experiment.save("openfold/config.py")
     elif (args.gpus is not None and args.gpus > 1) or args.num_nodes > 1:
-        strategy = DDPStrategy(find_unused_parameters=False,
+        strategy = DDPStrategy(find_unused_parameters=True,
                                cluster_environment=cluster_environment)
     else:
         strategy = None
@@ -662,6 +682,8 @@ if __name__ == "__main__":
     )
     parser.add_argument("--mpi_plugin", action="store_true", default=False,
                         help="Whether to use MPI for parallele processing")
+    parser.add_argument("--train_dockq_head_only", action="store_true", default=False,
+                        help="Train only the DockQ head, freezing the rest of the network")
 
     trainer_group = parser.add_argument_group(
         'Arguments to pass to PyTorch Lightning Trainer')

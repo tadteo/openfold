@@ -50,6 +50,20 @@ class AuxiliaryHeads(nn.Module):
                 **config.tm,
             )
 
+        # Add new heads for dockq components
+        self.dockq = DockQHead(
+            **config["dockq"],
+        )
+        # self.dockq_iRMSD = DockQComponentHead(
+        #     **config["dockq_iRMSD"],
+        # )
+        # self.dockq_LRMSD = DockQComponentHead(
+        #     **config["dockq_LRMSD"],
+        # )
+        # self.dockq_fnat = DockQComponentHead(
+        #     **config["dockq_fnat"],
+        # )
+
         self.config = config
 
     def forward(self, outputs):
@@ -93,6 +107,12 @@ class AuxiliaryHeads(nn.Module):
                     **self.config.tm,
                 )
             )
+
+        # Add predictions for dockq components
+        aux_out["dockq"] = self.dockq(outputs["single"])
+        # aux_out["dockq_iRMSD"] = self.dockq_component1(outputs["single"])
+        # aux_out["dockq_LRMSD"] = self.dockq_component2(outputs["single"])
+        # aux_out["dockq_fnat"] = self.dockq_component3(outputs["single"])
 
         return aux_out
 
@@ -265,3 +285,61 @@ class ExperimentallyResolvedHead(nn.Module):
         # [*, N, C_out]
         logits = self.linear(s)
         return logits
+
+
+class DockQHead(nn.Module):
+    """
+    For use in computation of dockq loss
+    """
+
+    def __init__(self, c_z, **kwargs):
+        """
+        Args:
+            c_z:
+                Input channel dimension
+        """
+        super(DockQHead, self).__init__()
+        self.linear = Linear(c_in, 128)  # An intermediate layer
+        self.final = Linear(128, 1)
+
+    def forward(self, z):
+        """
+        Args:
+            z:
+                [*, N_res, N_res, C_z] pairwise embedding
+        Returns:
+            [*] prediction (a single DockQ score)
+        """
+        # Apply linear layer
+        x = self.linear(z)
+        x = F.relu(x)
+        x = self.final(x)
+        x = torch.mean(x, dim=-2) 
+        
+        # Apply sigmoid to constrain output between 0 and 1
+        return torch.sigmoid(x)
+
+
+# class DockQComponentHead(nn.Module):
+#     """
+#     For use in computation of dockq component loss
+#     """
+
+#     def __init__(self, c_in, **kwargs):
+#         """
+#         Args:
+#             c_in:
+#                 Input channel dimension
+#         """
+#         super(DockQComponentHead, self).__init__()
+#         self.linear = Linear(c_in, 1, init="final")
+
+#     def forward(self, s):
+#         """
+#         Args:
+#             s:
+#                 [*, N_res, C_in] single embedding
+#         Returns:
+#             [*, N_res, 1] prediction
+#         """
+#         return self.linear(s)

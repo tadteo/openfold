@@ -255,6 +255,11 @@ def model_config(
         # a global constant
         set_inf(c, 1e4)
 
+    # Add DockQ configuration
+    if "dockq" not in c.loss:
+        c.loss.dockq = mlc.ConfigDict()
+    c.loss.dockq.weight = 0.25
+
     enforce_config_constraints(c)
 
     return c
@@ -650,6 +655,18 @@ config = mlc.ConfigDict(
                     "c_s": c_s,
                     "c_out": 37,
                 },
+                "dockq": {
+                    "c_in": c_s,
+                },
+                "dockq_iRMSD": {
+                    "c_in": c_s,
+                },
+                "dockq_LRMSD": {
+                    "c_in": c_s,
+                },
+                "dockq_fnat": {
+                    "c_in": c_s,
+                },
             },
             # A negative value indicates that no early stopping will occur, i.e.
             # the model will always run `max_recycling_iters` number of recycling
@@ -727,6 +744,9 @@ config = mlc.ConfigDict(
                 "eps": eps,  # 1e-8,
                 "weight": 0.,
                 "enabled": tm_enabled,
+            },
+            "dockq": {
+                "weight": 0.25,
             },
             "chain_center_of_mass": {
                 "clamp_distance": -4.0,

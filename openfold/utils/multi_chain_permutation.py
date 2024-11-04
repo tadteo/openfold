@@ -46,19 +46,36 @@ def kabsch_rotation(P: torch.Tensor, Q: torch.Tensor) -> torch.Tensor:
     return:
         one 3*3 rotation matrix that best aligns the sorce and target atoms 
     """
+    
+    original_dtype = P.dtype
+    P = P.to(torch.float32)
+    Q = Q.to(torch.float32)
+    
     assert P.shape == torch.Size([Q.shape[0], Q.shape[1]])
 
+    
+    logging.warning(f"The type of P and Q are: {P.dtype, Q.dtype}")
+    
+    
+    # Compute covariance matrix
+    A = torch.matmul(P.T, Q)
+    
+    logging.warning(f"The type of A is: {A.dtype}")
     # Firstly, compute SVD of P.T * Q
-    u, _, vt = torch.linalg.svd(torch.matmul(P.to(torch.float32).T,
-                                             Q.to(torch.float32)))
+    u, _, vt = torch.linalg.svd(A.to(torch.float32))
+    
     # Then construct s matrix
     s = torch.eye(P.shape[1], device=P.device)
     # correct the rotation matrix to ensure a right-handed coordinate
-    s[-1, -1] = torch.sign(torch.linalg.det(torch.matmul(u, vt)))
+    logging.warning(f"The type of u and vt are: {u.dtype, vt.dtype}")
+    s[-1, -1] = torch.sign(torch.linalg.det(torch.matmul(u.to(torch.float32), vt.to(torch.float32)).to(torch.float32)).to(torch.float32))
+    
     # finally compute the rotation matrix
-    r_opt = torch.matmul(torch.matmul(u, s), vt)
+    r_opt = torch.matmul(torch.matmul(u.to(torch.float32), s.to(torch.float32)).to(torch.float32), vt.to(torch.float32)).to(torch.float32)
     assert r_opt.shape == torch.Size([3,3])
-    return r_opt.to(device=P.device, dtype=P.dtype)
+    r_opt = r_opt.to(device=P.device, dtype=torch.bfloat16)
+    logging.warning(f"The type of r_opt is: {r_opt.dtype}")
+    return r_opt
 
 
 def get_optimal_transform(

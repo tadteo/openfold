@@ -26,11 +26,11 @@ SUPPORTED_DTYPES = [torch.float32, torch.bfloat16]
 class AttentionCoreFunction(torch.autograd.Function):
     @staticmethod
     def forward(ctx, q, k, v, bias_1=None, bias_2=None):
-        print(f"q shape: {q.shape}")
-        print(f"k shape: {k.shape}")
-        print(f"v shape: {v.shape}")
-        print(f"bias_1 shape: {bias_1.shape if bias_1 is not None else None}")
-        print(f"bias_2 shape: {bias_2.shape if bias_2 is not None else None}")
+        # print(f"q shape: {q.shape}")
+        # print(f"k shape: {k.shape}")
+        # print(f"v shape: {v.shape}")
+        # print(f"bias_1 shape: {bias_1.shape if bias_1 is not None else None}")
+        # print(f"bias_2 shape: {bias_2.shape if bias_2 is not None else None}")
         
         if(bias_1 is None and bias_2 is not None):
             raise ValueError("bias_1 must be specified before bias_2")

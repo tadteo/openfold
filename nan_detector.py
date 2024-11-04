@@ -25,7 +25,7 @@ class NaNDetector(pl.Callback):
             if self._check_nan(f"parameter {name}", param):
                 print(f"NaN in parameter {name} after batch {batch_idx}")
 
-    def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx):
+    def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0):
         if outputs is not None and 'loss' in outputs:
             if self._check_nan("validation loss", outputs['loss']):
                 print(f"NaN in validation loss at batch {batch_idx}")

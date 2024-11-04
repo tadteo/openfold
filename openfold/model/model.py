@@ -36,7 +36,7 @@ from openfold.model.embedders import (
     PreembeddingEmbedder,
 )
 from openfold.model.evoformer import EvoformerStack, ExtraMSAStack
-from openfold.model.mamba_evoformer import MambaEvoformerStack, ExtraMSAStack
+from openfold.model.mamba_evoformer import MambaEvoformerStack, MambaExtraMSAStack
 
 from openfold.model.heads import AuxiliaryHeads
 from openfold.model.structure_module import StructureModule
@@ -119,15 +119,24 @@ class AlphaFold(nn.Module):
             self.extra_msa_embedder = ExtraMSAEmbedder(
                 **self.extra_msa_config["extra_msa_embedder"],
             )
-            self.extra_msa_stack = ExtraMSAStack(
+            if self.globals.evoformer_type == "Evoformer":
+                self.extra_msa_stack = ExtraMSAStack(
+                    **self.extra_msa_config["extra_msa_stack"],
+                )
+            elif self.globals.evoformer_type == "MambaEvoformer":
+                self.extra_msa_stack = MambaExtraMSAStack(
                 **self.extra_msa_config["extra_msa_stack"],
             )
+            else:
+                raise ValueError(f"Invalid evoformer_type: {self.globals.evoformer_type}")
             
-        if config.globals.evoformer_type == "Evoformer":
-            self.evoformer = EvoformerStack(**self.config["evoformer_stack"],)
-        elif config.globals.evoformer_type == "MambaEvoformer":
-            self.evoformer = MambaEvoformerStack(**self.config["mamba_evoformer_stack"],)
-
+        if self.globals.evoformer_type == "Evoformer":
+            self.evoformer = EvoformerStack(**self.config["evoformer_stack"])
+        elif self.globals.evoformer_type == "MambaEvoformer":
+            self.evoformer = MambaEvoformerStack(**self.config["mamba_evoformer_stack"])
+        else:
+            raise ValueError(f"Invalid evoformer_type: {self.globals.evoformer_type}")
+        
         self.structure_module = StructureModule(
             is_multimer=self.globals.is_multimer,
             **self.config["structure_module"],
@@ -135,7 +144,7 @@ class AlphaFold(nn.Module):
         self.aux_heads = AuxiliaryHeads(
             self.config["heads"],
         )
-
+        
     def embed_templates(self, batch, feats, z, pair_mask, templ_dim, inplace_safe):
         if self.globals.is_multimer:
             asym_id = feats["asym_id"]
@@ -312,6 +321,10 @@ class AlphaFold(nn.Module):
         m[..., 0, :, :] += m_1_prev_emb
 
         # [*, N, N, C_z]
+        # print("z shape:", z.shape)
+        # print("z_prev_emb shape:", z_prev_emb.shape)
+        z_prev_emb = z_prev_emb.squeeze(0)
+
         z = add(z, z_prev_emb, inplace=inplace_safe)
 
         # Deletions like these become significant for inference with large N,
@@ -420,7 +433,6 @@ class AlphaFold(nn.Module):
                 use_lma=self.globals.use_lma,
                 _mask_trans=self.config._mask_trans,
             )
-
             del input_tensors
         else:
             m, z, s = self.evoformer(

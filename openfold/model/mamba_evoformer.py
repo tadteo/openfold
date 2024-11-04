@@ -223,11 +223,11 @@ class PairStack(nn.Module):
         z = z.reshape(batch_size, seq_len * seq_len, dim).contiguous()
         # print(f"z.shape is: {z.shape}")
         
-        print("Entering PairStack forward method")
-        print(f"z shape before Mamba: {z.shape}")
-        z = self.mamba(z)
-        print(f"z shape after Mamba: {z.shape}")
+        # print(f"The z shape is: {z.shape}")
         
+        # Process the 1D vector with mamba module
+        z = self.mamba(z)
+
         # Reconvert the 1D vector back to a matrix
         z = z.reshape(batch_size, seq_len, seq_len, dim).contiguous()
         self.triangular_pos_dec(z)
@@ -1097,7 +1097,7 @@ class MambaEvoformerStack(nn.Module):
         return m, z, s
 
 
-class ExtraMSAStack(nn.Module):
+class MambaExtraMSAStack(nn.Module):
     """
     Implements Algorithm 18.
     """
@@ -1123,7 +1123,7 @@ class ExtraMSAStack(nn.Module):
         tune_chunk_size: bool = False,
         **kwargs,
     ):
-        super(ExtraMSAStack, self).__init__()
+        super(MambaExtraMSAStack, self).__init__()
  
         self.ckpt = ckpt
         self.clear_cache_between_blocks = clear_cache_between_blocks

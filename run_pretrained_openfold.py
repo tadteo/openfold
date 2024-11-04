@@ -56,6 +56,8 @@ from scripts.utils import add_data_args
 
 from torchinfo import summary
 
+from openfold.data.templates import EmptyTemplateFeaturizer
+
 
 TRACING_INTERVAL = 50
 
@@ -200,13 +202,16 @@ def main(args):
 
     is_multimer = "multimer" in args.config_preset
     is_custom_template = "use_custom_template" in args and args.use_custom_template
-    if is_custom_template:
+    
+    if args.template_mmcif_dir == "/dev/null":
+        template_featurizer = EmptyTemplateFeaturizer()
+    elif is_custom_template:
         template_featurizer = templates.CustomHitFeaturizer(
             mmcif_dir=args.template_mmcif_dir,
             max_template_date="9999-12-31", # just dummy, not used
             max_hits=-1, # just dummy, not used
             kalign_binary_path=args.kalign_binary_path
-            )
+        )
     elif is_multimer:
         template_featurizer = templates.HmmsearchHitFeaturizer(
             mmcif_dir=args.template_mmcif_dir,
@@ -355,38 +360,65 @@ def main(args):
                 args.subtract_plddt
             )
 
-            unrelaxed_file_suffix = "_unrelaxed.pdb"
-            if args.cif_output:
-                unrelaxed_file_suffix = "_unrelaxed.cif"
-            unrelaxed_output_path = os.path.join(
-                output_directory, f'{output_name}{unrelaxed_file_suffix}'
-            )
-
-            with open(unrelaxed_output_path, 'w') as fp:
+            # Save output with error handling
+            try:
+                unrelaxed_file_suffix = "_unrelaxed.pdb"
                 if args.cif_output:
-                    fp.write(protein.to_modelcif(unrelaxed_protein))
-                else:
-                    fp.write(protein.to_pdb(unrelaxed_protein))
-
-            logger.info(f"Output written to {unrelaxed_output_path}...")
-
-            if not args.skip_relaxation:
-                # Relax the prediction.
-                logger.info(f"Running relaxation on {unrelaxed_output_path}...")
-                relax_protein(config, args.model_device, unrelaxed_protein, output_directory, output_name,
-                              args.cif_output)
-
-            if args.save_outputs:
-                output_dict_path = os.path.join(
-                    output_directory, f'{output_name}_output_dict.pkl'
+                    unrelaxed_file_suffix = "_unrelaxed.cif"
+                unrelaxed_output_path = os.path.join(
+                    output_directory, f'{output_name}{unrelaxed_file_suffix}'
                 )
-                with open(output_dict_path, "wb") as fp:
-                    pickle.dump(out, fp, protocol=pickle.HIGHEST_PROTOCOL)
 
-                logger.info(f"Model output written to {output_dict_path}...")
+                with open(unrelaxed_output_path, 'w') as fp:
+                    if args.cif_output:
+                        fp.write(protein.to_modelcif(unrelaxed_protein))
+                    else:
+                        try:
+                            pdb_str = protein.to_pdb(unrelaxed_protein)
+                            fp.write(pdb_str)
+                        except UnboundLocalError as e:
+                            logger.error(f"Failed to convert protein {tag} to PDB format: {str(e)}")
+                            logger.error("This might be due to missing chain information. Skipping this protein...")
+                            continue
+                        except Exception as e:
+                            logger.error(f"Unexpected error converting protein {tag} to PDB: {str(e)}")
+                            continue
+
+                logger.info(f"Output written to {unrelaxed_output_path}...")
+
+                if not args.skip_relaxation:
+                    try:
+                        # Relax the prediction.
+                        logger.info(f"Running relaxation on {unrelaxed_output_path}...")
+                        relax_protein(config, args.model_device, unrelaxed_protein, output_directory, output_name,
+                                    args.cif_output)
+                    except Exception as e:
+                        logger.error(f"Failed to relax protein {tag}: {str(e)}")
+                        continue
+
+                if args.save_outputs:
+                    try:
+                        output_dict_path = os.path.join(
+                            output_directory, f'{output_name}_output_dict.pkl'
+                        )
+                        with open(output_dict_path, "wb") as fp:
+                            pickle.dump(out, fp, protocol=pickle.HIGHEST_PROTOCOL)
+                        logger.info(f"Model output written to {output_dict_path}...")
+                    except Exception as e:
+                        logger.error(f"Failed to save output dictionary for {tag}: {str(e)}")
+                        continue
+
+            except Exception as e:
+                logger.error(f"Failed to process protein {tag}: {str(e)}")
+                continue
 
         # After model initialization
-        summary(model, input_size=(batch_size, seq_length, input_dim))
+        # Define the input size for the summary
+        # batch_size = 1  # or whatever batch size you're using
+        # seq_length = 191  # based on the previous error message
+        # input_dim = 128  # this should match your model's input dimension
+
+        # summary(model, input_size=(batch_size, seq_length, input_dim))
 
 
 if __name__ == "__main__":

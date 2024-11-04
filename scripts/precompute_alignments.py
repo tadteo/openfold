@@ -4,9 +4,10 @@ import json
 import logging
 import os
 import threading
-from multiprocessing import cpu_count
+from multiprocessing import cpu_count, Manager, Lock
 from shutil import copyfile
 import tempfile
+import time
 
 import openfold.data.mmcif_parsing as mmcif_parsing
 from openfold.data.data_pipeline import AlignmentRunner
@@ -19,17 +20,32 @@ from utils import add_data_args
 
 logging.basicConfig(level=logging.WARNING)
 
+# Add this near the top of the file
+manager = Manager()
+processed_count = manager.Value('i', 0)
+total_count = manager.Value('i', 0)
+skipped_count = manager.Value('i', 0)
+count_lock = Lock()
+
 
 def run_seq_group_alignments(seq_groups, alignment_runner, args):
+    global processed_count, total_count, skipped_count, count_lock
     dirs = set(os.listdir(args.output_dir))
     for seq, names in seq_groups:
         first_name = names[0]
         alignment_dir = os.path.join(args.output_dir, first_name)
         
+        if os.path.exists(alignment_dir):
+            with count_lock:
+                skipped_count.value += len(names)
+            continue
+
         try:
             os.makedirs(alignment_dir)
         except Exception as e:
             logging.warning(f"Failed to create directory for {first_name} with exception {e}...")
+            with count_lock:
+                skipped_count.value += len(names)
             continue
 
         fd, fasta_path = tempfile.mkstemp(suffix=".fasta")
@@ -40,11 +56,15 @@ def run_seq_group_alignments(seq_groups, alignment_runner, args):
             alignment_runner.run(
                 fasta_path, alignment_dir
             )
+            with count_lock:
+                processed_count.value += len(names)
         except Exception as e:
             logging.warning(e)
             logging.warning(f"Failed to run alignments for {first_name}. Skipping...")
             os.remove(fasta_path)
             os.rmdir(alignment_dir)
+            with count_lock:
+                skipped_count.value += len(names)
             continue
 
         os.remove(fasta_path)
@@ -227,8 +247,28 @@ def main(args):
         threads.append(t)
         t.start()
 
+    global total_count
+    total_count.value = len(files)
+
+    # Add this loop to periodically print progress
+    while any(t.is_alive() for t in threads):
+        with count_lock:
+            processed = processed_count.value
+            skipped = skipped_count.value
+            total = total_count.value
+        print(f"Progress: {processed + skipped}/{total} "
+              f"(Processed: {processed}, Skipped: {skipped})")
+        time.sleep(60)  # Print progress every minute
+
     for t in threads:
         t.join()
+
+    with count_lock:
+        processed = processed_count.value
+        skipped = skipped_count.value
+        total = total_count.value
+    print(f"Job completed. Total: {total}, "
+          f"Processed: {processed}, Skipped: {skipped}")
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@ import copy
 import importlib
 import ml_collections as mlc
 
-number_of_layers_in_evoformer=12 #48 #12
+number_of_layers_in_evoformer=48 #48 #12
 
 def set_inf(c, inf):
     for k, v in c.items():
@@ -70,6 +70,7 @@ def model_config(
     # TRAINING PRESETS
     if name == "initial_training":
         # AF2 Suppl. Table 4, "initial training" setting
+        # TODO: We don't use templates to run inference on initial training, remember to put it to pass when finishing
         pass
     elif name == "finetuning":
         # AF2 Suppl. Table 4, "finetuning" setting
@@ -485,7 +486,7 @@ config = mlc.ConfigDict(
             "eps": eps,
             "is_multimer": False,
             "seqemb_mode_enabled": False, # Global flag for enabling seq emb mode
-            "evoformer_type" : "Evoformer",  # or "MambaEvoformer" or "Evoformer"
+            "evoformer_type" : "MambaEvoformer",  # or "MambaEvoformer" or "Evoformer"
         },
         "model": {
             "_mask_trans": False,

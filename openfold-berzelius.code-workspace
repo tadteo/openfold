@@ -17,6 +17,30 @@
 		},
 		{
 			"path": "../openfold_params/openfold_params"
+		},
+		{
+			"path": "../openfold_training_for_paper_output"
+		},
+		{
+			"path": "../logs"
+		},
+		{
+			"path": "../openfold_training_multimer_output"
+		},
+		{
+			"path": "../tmp"
+		},
+		{
+			"path": "../openfold_inference_output_paper"
+		},
+		{
+			"path": "../openfold_inference_output_paper_mamba"
+		},
+		{
+			"path": "../openfold_inference_output_paper_vanilla"
+		},
+		{
+			"path": "../openfold_inference_output_paper_vanilla_2"
 		}
 	],
 	"settings": {}

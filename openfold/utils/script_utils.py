@@ -3,6 +3,8 @@ import logging
 import os
 import re
 import time
+import gc
+import psutil
 
 import numpy
 import torch
@@ -128,10 +130,25 @@ def parse_fasta(data):
     return tags, seqs
 
 
-def update_timings(timing_dict, output_file=os.path.join(os.getcwd(), "timings.json")):
+def update_timings(timing_dict, output_dir):
     """
-    Write dictionary of one or more run step times to a file
+    Write timing information for a single protein to its own JSON file.
+    
+    Args:
+        timing_dict: Dictionary containing timing info for one protein
+        output_dir: Base output directory
     """
+    # Create timings directory if it doesn't exist
+    timings_dir = os.path.join(output_dir, "timings")
+    os.makedirs(timings_dir, exist_ok=True)
+    
+    # Extract protein tag from the timing dictionary (should only have one key)
+    tag = list(timing_dict.keys())[0]
+    
+    # Create protein-specific timing file
+    output_file = os.path.join(timings_dir, f"{tag}_timing.json")
+    
+    # Load existing timing data for this protein if it exists
     if os.path.exists(output_file):
         with open(output_file, "r") as f:
             try:
@@ -141,28 +158,101 @@ def update_timings(timing_dict, output_file=os.path.join(os.getcwd(), "timings.j
                 timings = {}
     else:
         timings = {}
-    timings.update(timing_dict)
+    
+    # Update with new timing information
+    timings.update(timing_dict[tag])
+    
+    # Write to protein-specific file
     with open(output_file, "w") as f:
-        json.dump(timings, f)
+        json.dump(timings, f, indent=2)
+    
     return output_file
 
 
 def run_model(model, batch, tag, output_dir):
-    with torch.no_grad():
-        # Temporarily disable templates if there aren't any in the batch
-        template_enabled = model.config.template.enabled
-        model.config.template.enabled = template_enabled and any([
-            "template_" in k for k in batch
-        ])
+    """
+    Run inference using an OpenFold model and track performance metrics.
+    
+    Args:
+        model: The OpenFold model instance
+        batch: Input batch containing protein data
+        tag: Unique identifier for the protein (e.g. chain ID)
+        output_dir: Base output directory for results
+        
+    Returns:
+        out: Model predictions or None if error occurred
+        
+    Performance metrics (saved to {output_dir}/timings/{tag}_timing.json):
+        - Inference time
+        - Peak CPU memory usage
+        - Peak GPU memory usage (if available)
+        - Error status and details if applicable
+    """
+    try:
+        with torch.no_grad():
+            # Clear memory before starting
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.reset_peak_memory_stats()
 
-        logger.info(f"Running inference for {tag}...")
-        t = time.perf_counter()
-        out = model(batch)
-        inference_time = time.perf_counter() - t
-        logger.info(f"Inference time: {inference_time}")
-        update_timings({tag: {"inference": inference_time}}, os.path.join(output_dir, "timings.json"))
+            # Temporarily disable templates if there aren't any in the batch
+            template_enabled = model.config.template.enabled
+            model.config.template.enabled = template_enabled and any([
+                "template_" in k for k in batch
+            ])
 
-        model.config.template.enabled = template_enabled
+            logger.info(f"Running inference for {tag}...")
+            t = time.perf_counter()
+            out = model(batch)
+            
+            # Ensure all GPU operations are completed
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+                
+            inference_time = time.perf_counter() - t
+            
+            # Get peak memory usage
+            memory_stats = {
+                'cpu_memory_mb': psutil.Process().memory_info().rss / (1024 * 1024),
+                'status': 'success'
+            }
+            if torch.cuda.is_available():
+                memory_stats['gpu_max_memory_mb'] = torch.cuda.max_memory_allocated() / (1024 * 1024)
+
+            logger.info(f"Inference time: {inference_time}")
+            logger.info(f"Peak CPU Memory: {memory_stats['cpu_memory_mb']:.2f} MB")
+            if torch.cuda.is_available():
+                logger.info(f"Peak GPU Memory: {memory_stats['gpu_max_memory_mb']:.2f} MB")
+
+    except (RuntimeError, torch.cuda.OutOfMemoryError) as e:
+        logger.error(f"Out of memory error for {tag}: {str(e)}")
+        memory_stats = {
+            'cpu_memory_mb': None,
+            'gpu_max_memory_mb': None,
+            'status': 'out_of_memory',
+            'error': str(e)
+        }
+        inference_time = None
+        out = None
+    except Exception as e:
+        logger.error(f"Unexpected error for {tag}: {str(e)}")
+        memory_stats = {
+            'cpu_memory_mb': None,
+            'gpu_max_memory_mb': None,
+            'status': 'error',
+            'error': str(e)
+        }
+        inference_time = None
+        out = None
+
+    # Update timings with protein-specific file
+    update_timings({tag: {
+        "inference": inference_time,
+        "memory": memory_stats
+    }}, output_dir)
+
+    model.config.template.enabled = template_enabled
 
     return out
 
@@ -246,7 +336,11 @@ def relax_protein(config, model_device, unrelaxed_protein, output_directory, out
     relaxation_time = time.perf_counter() - t
 
     logger.info(f"Relaxation time: {relaxation_time}")
-    update_timings({"relaxation": relaxation_time}, os.path.join(output_directory, "timings.json"))
+    # Update relaxation timing in protein-specific file
+    tag = output_name.split('_')[0]  # Extract protein tag from output name
+    update_timings({tag: {
+        "relaxation": relaxation_time
+    }}, output_directory)
 
     # Save the relaxed PDB.
     suffix = "_relaxed.pdb"

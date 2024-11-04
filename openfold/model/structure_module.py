@@ -501,20 +501,35 @@ class InvariantPointAttention(nn.Module):
         # Remove the batch dimension from o_pair
         o_pair = o_pair.squeeze(0)
 
-        print(f"o shape: {o.shape}")
-        print(f"o_pt shapes: {[pt.shape for pt in o_pt]}")
-        print(f"o_pt_norm shape: {o_pt_norm.shape}")
-        print(f"o_pair shape: {o_pair.shape}")
-        
-        
-        # [*, N_res, C_s]
+        # Check if o_pair has a batch dimension
+        if o_pair.dim() == 3:
+            # Training mode (with batch dimension)
+            batch_size, n_res, _ = o_pair.shape
+        else:
+            # Inference mode (no batch dimension)
+            batch_size, n_res = 1, o_pair.shape[0]
+            # Add a batch dimension
+            o_pair = o_pair.unsqueeze(0)
+            o = o.unsqueeze(0) if o.dim() == 2 else o
+            o_pt = [pt.unsqueeze(0) if pt.dim() == 2 else pt for pt in o_pt]
+            o_pt_norm = o_pt_norm.unsqueeze(0) if o_pt_norm.dim() == 2 else o_pt_norm
+
+        # print(f"o shape: {o.shape}")
+        # print(f"o_pt shapes: {[pt.shape for pt in o_pt]}")
+        # print(f"o_pt_norm shape: {o_pt_norm.shape}")
+        # print(f"o_pair shape: {o_pair.shape}")
+
+        # [batch_size, N_res, C_s]
         s = self.linear_out(
             torch.cat(
                 (o, *o_pt, o_pt_norm, o_pair), dim=-1
             ).to(dtype=z[0].dtype)
         )
-        
-        
+
+        # Remove the batch dimension if it was added for inference
+        if batch_size == 1 and s.dim() == 3:
+            s = s.squeeze(0)
+
         return s
 
 
@@ -1261,3 +1276,4 @@ class StructureModule(nn.Module):
             self.atom_mask,
             self.lit_positions,
         )
+

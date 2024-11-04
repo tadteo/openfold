@@ -410,6 +410,12 @@ class OpenFoldSingleMultimerDataset(torch.utils.data.Dataset):
             mmcif: i for i, mmcif in enumerate(self._mmcifs)
         }
 
+        # Load mmcif data cache if provided
+        self._mmcif_cache = None
+        if mmcif_data_cache_path is not None:
+            with open(mmcif_data_cache_path, 'r') as f:
+                self._mmcif_cache = json.load(f)
+
         template_featurizer = templates.HmmsearchHitFeaturizer(
             mmcif_dir=template_mmcif_dir,
             max_template_date=max_template_date,
@@ -1093,7 +1099,7 @@ class OpenFoldMultimerDataModule(OpenFoldDataModule):
         self.training_mode = self.train_data_dir is not None
         self.val_mmcif_data_cache_path = val_mmcif_data_cache_path
 
-    def setup(self, setup=None):
+    def setup(self, stage=None):
         # Most of the arguments are the same for the three datasets 
         dataset_gen = partial(OpenFoldSingleMultimerDataset,
                               template_mmcif_dir=self.template_mmcif_dir,
@@ -1192,3 +1198,4 @@ class DummyDataLoader(pl.LightningDataModule):
 
     def train_dataloader(self):
         return torch.utils.data.DataLoader(self.dataset)
+

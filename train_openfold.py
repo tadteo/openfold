@@ -327,7 +327,11 @@ def main(args):
         args.config_preset, 
         train=True, 
         low_prec=is_low_precision,
-    ) 
+    )
+    
+    # Update config with command-line argument
+    config.globals.evoformer_type = args.evoformer_type
+    
     if args.experiment_config_json: 
         with open(args.experiment_config_json, 'r') as f:
             custom_config_dict = json.load(f)
@@ -716,6 +720,12 @@ if __name__ == "__main__":
     parser.add_argument(
         "--run_description", type=str, default="",
         help="Short description for the run to be used in filenames"
+    )
+    
+    parser.add_argument(
+        "--evoformer_type", type=str, default="Evoformer",
+        choices=["Evoformer", "MambaEvoformer"],
+        help="Type of Evoformer to use"
     )
     
     trainer_group = parser.add_argument_group(

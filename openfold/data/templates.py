@@ -1321,3 +1321,38 @@ class HmmsearchHitFeaturizer(TemplateHitFeaturizer):
             errors=errors,
             warnings=warnings,
         )
+
+
+class EmptyTemplateFeaturizer(TemplateHitFeaturizer):
+    """A featurizer that returns empty features when no templates should be used."""
+    def __init__(self):
+        pass
+        # super().__init__(
+        #     mmcif_dir="",
+        #     max_template_date="9999-12-31", # just dummy, not used
+        #     max_hits=-1, # just dummy, not used
+        #     kalign_binary_path="",
+        # )
+
+    def get_templates(
+        self,
+        query_sequence: str,
+        hits: Sequence[parsers.TemplateHit]
+    ) -> TemplateSearchResult:
+        """Returns empty template features.
+        
+        Args:
+            query_sequence: The query sequence
+            hits: Sequence of template hits (ignored)
+            
+        Returns:
+            TemplateSearchResult with empty features
+        """
+        num_res = len(query_sequence)
+        template_features = empty_template_feats(num_res)
+        
+        return TemplateSearchResult(
+            features=template_features,
+            errors=[],
+            warnings=[]
+        )

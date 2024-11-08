@@ -486,7 +486,7 @@ config = mlc.ConfigDict(
             "eps": eps,
             "is_multimer": False,
             "seqemb_mode_enabled": False, # Global flag for enabling seq emb mode
-            "evoformer_type" : "Evoformer",  # or "MambaEvoformer" or "Evoformer"
+            "evoformer_type" : "MambaEvoformer",  # or "MambaEvoformer" or "Evoformer"
         },
         "model": {
             "_mask_trans": False,

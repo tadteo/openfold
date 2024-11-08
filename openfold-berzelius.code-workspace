@@ -4,9 +4,6 @@
 			"path": "."
 		},
 		{
-			"path": "../logs/openfold_train"
-		},
-		{
 			"path": "../phd_utils"
 		},
 		{
@@ -25,9 +22,6 @@
 			"path": "../openfold_training_multimer_output"
 		},
 		{
-			"path": "../tmp"
-		},
-		{
 			"path": "../openfold_inference_output_paper"
 		},
 		{
@@ -40,7 +34,10 @@
 			"path": "../openfold_inference_output_paper_vanilla_2"
 		},
 		{
-			"path": "../../../Database/cameo-3months-22-01-16"
+			"path": "../big_proteins"
+		},
+		{
+			"path": "../openfold_inference_big_prot_test"
 		}
 	],
 	"settings": {}

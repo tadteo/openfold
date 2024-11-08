@@ -16,9 +16,6 @@
 			"path": "../openfold_inference_output"
 		},
 		{
-			"path": "../openfold_params/openfold_params"
-		},
-		{
 			"path": "../openfold_training_for_paper_output"
 		},
 		{
@@ -41,6 +38,9 @@
 		},
 		{
 			"path": "../openfold_inference_output_paper_vanilla_2"
+		},
+		{
+			"path": "../../../Database/cameo-3months-22-01-16"
 		}
 	],
 	"settings": {}

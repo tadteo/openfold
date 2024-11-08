@@ -41,6 +41,9 @@
 		},
 		{
 			"path": "../../../Database/cameo-3months-22-01-16"
+		},
+		{
+			"path": "../big_proteins"
 		}
 	],
 	"settings": {}

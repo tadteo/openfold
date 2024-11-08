@@ -30,7 +30,7 @@ from openfold.utils.chunk_utils import chunk_layer, ChunkSizeTuner
 from openfold.utils.tensor_utils import add
 from openfold.utils.triangular_positional_encoding import TriangularPositionalEncoding, TriangularPositionalDecoding
 
-from mamba_ssm import Mamba
+from mamba_ssm import Mamba2
 
 class MSATransition(nn.Module):
     """
@@ -119,7 +119,7 @@ class PairStack(nn.Module):
         fuse_projection_weights: bool,
         inf: float,
         eps: float,
-        d_state: int = 64,  # SSM state expansion factor
+        d_state: int = 64,  # SSM state expansion factor normally 64 or 128
         d_conv: int = 4,    # Local convolution width try to change these
         expand: int = 2,    # Block expansion factor
     ):
@@ -150,9 +150,9 @@ class PairStack(nn.Module):
 
         # Add a single layer normalization instance
         self.layer_norm = nn.LayerNorm(c_z)
-        
+        # print(f"c_z is: {c_z}")
         # Initialize the Mamba module
-        self.mamba = Mamba(
+        self.mamba = Mamba2(
             d_model=c_z,  # Model dimension
             d_state=d_state,  # SSM state expansion factor
             d_conv=d_conv,    # Local convolution width

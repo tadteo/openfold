@@ -426,6 +426,8 @@ def main(args):
 
     if(args.log_performance):
         global_batch_size = args.num_nodes * args.gpus
+        # Create the output directory itself
+        os.makedirs(args.output_dir, exist_ok=True)
         perf = PerformanceLoggingCallback(
             log_file=os.path.join(args.output_dir, "performance_log.json"),
             global_batch_size=global_batch_size,

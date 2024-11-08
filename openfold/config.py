@@ -262,7 +262,7 @@ def model_config(
     return c
 
 
-c_z = mlc.FieldReference(128, field_type=int)
+c_z = mlc.FieldReference(256, field_type=int) #default 128
 c_m = mlc.FieldReference(256, field_type=int)
 c_t = mlc.FieldReference(64, field_type=int)
 c_e = mlc.FieldReference(64, field_type=int)

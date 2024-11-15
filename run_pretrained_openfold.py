@@ -44,7 +44,7 @@ from openfold.data import templates, feature_pipeline, data_pipeline
 from openfold.data.tools import hhsearch, hmmsearch
 from openfold.np import protein
 from openfold.utils.script_utils import (load_models_from_command_line, parse_fasta, run_model,
-                                         prep_output, relax_protein)
+                                         prep_output, relax_protein, create_pipelined_model)
 from openfold.utils.tensor_utils import tensor_tree_map
 from openfold.utils.trace_utils import (
     pad_feature_dict_seq,
@@ -284,9 +284,14 @@ def main(args):
         raise ValueError(
             '`openfold_checkpoint_path` was specified, but no OpenFold checkpoints are available for multimer mode')
 
+    # Load the model
+    # Parse device string and use first device for initial tensor allocation
+    device_list = args.model_device.split(",") if "," in args.model_device else [args.model_device]
+    primary_device = device_list[0]  # Use the first device for initial tensors
+
     model_generator = load_models_from_command_line(
         config,
-        args.model_device,
+        primary_device,
         args.openfold_checkpoint_path,
         args.jax_param_path,
         args.output_dir)
@@ -323,8 +328,13 @@ def main(args):
                 feature_dict, mode='predict', is_multimer=is_multimer
             )
 
+            # Parse device string and use first device for initial tensor allocation
+            device_list = args.model_device.split(",") if "," in args.model_device else [args.model_device]
+            primary_device = device_list[0]  # Use the first device for initial tensors
+
+            # Modify the feature dictionary creation
             processed_feature_dict = {
-                k: torch.as_tensor(v, device=args.model_device)
+                k: torch.as_tensor(v, device=primary_device)
                 for k, v in processed_feature_dict.items()
             }
 
@@ -340,9 +350,12 @@ def main(args):
                         f"Tracing time: {tracing_time}"
                     )
                     cur_tracing_interval = rounded_seqlen
+            
+            # Apply pipelining to the model using the actual `processed_feature_dict`
+            model = create_pipelined_model(model, device_list, processed_feature_dict)
 
             out = run_model(model, processed_feature_dict, tag, args.output_dir)
-
+            
             # Toss out the recycling dimensions --- we don't need them anymore
             processed_feature_dict = tensor_tree_map(
                 lambda x: np.array(x[..., -1].cpu()),
@@ -450,7 +463,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model_device", type=str, default="cpu",
         help="""Name of the device on which to run the model. Any valid torch
-             device name is accepted (e.g. "cpu", "cuda:0")"""
+             device name is accepted (e.g. "cpu", "cuda:0"), or Comma-separated list of devices for pipeline parallelism (e.g., 'cuda:0,cuda:1')"""
     )
     parser.add_argument(
         "--config_preset", type=str, default="model_1",

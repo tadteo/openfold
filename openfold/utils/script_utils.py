@@ -17,6 +17,9 @@ from openfold.utils.import_weights import (
     import_openfold_weights_
 )
 
+import torch
+from torch.distributed.pipelining import pipeline, SplitPoint
+from torch.nn import Sequential
 from pytorch_lightning.utilities.deepspeed import (
     convert_zero_checkpoint_to_fp32_state_dict
 )
@@ -51,6 +54,29 @@ def make_output_directory(output_dir, model_name, multiple_model_mode):
     os.makedirs(prediction_dir, exist_ok=True)
     return prediction_dir
 
+def create_pipelined_model(model, device_list, processed_feature_dict):
+        if len(device_list) > 1:
+            # Move model to the first device
+            model.to(device_list[0])
+
+            # Use actual input data for setting up the pipeline
+            mb_args = (processed_feature_dict,)
+
+            # Define split points for the pipeline
+            split_spec = {
+                "evoformer.blocks.15": SplitPoint.BEGINNING  # Adjust as needed
+            }
+
+            # Build the pipeline with actual input
+            pipelined_model = pipeline(
+                module=model,
+                mb_args=mb_args,
+                split_spec=split_spec
+            )
+
+            return pipelined_model
+        else:
+            return model.to(device_list[0])
 
 def load_models_from_command_line(config, model_device, openfold_checkpoint_path, jax_param_path, output_dir):
     # Create the output directory
@@ -59,6 +85,10 @@ def load_models_from_command_line(config, model_device, openfold_checkpoint_path
     if multiple_model_mode:
         logger.info(f"evaluating multiple models")
 
+    # Parse device string and use first device for initial tensor allocation
+    device_list = model_device.split(",") if "," in model_device else [model_device]
+    primary_device = device_list[0]  # Use the first device for initial tensors
+    
     if jax_param_path:
         for path in jax_param_path.split(","):
             model_basename = get_model_basename(path)
@@ -104,6 +134,7 @@ def load_models_from_command_line(config, model_device, openfold_checkpoint_path
                 import_openfold_weights_(model=model, state_dict=d)
 
             model = model.to(model_device)
+
             logger.info(
                 f"Loaded OpenFold parameters at {path}..."
             )
@@ -196,6 +227,11 @@ def run_model(model, batch, tag, output_dir):
                 torch.cuda.empty_cache()
                 torch.cuda.reset_peak_memory_stats()
 
+            # Print the shapes of each input tensor
+            logger.info(f"Running inference for {tag}. Input shapes:")
+            for key, tensor in batch.items():
+                logger.info(f"{key}: shape = {tensor.shape}")
+            
             # Temporarily disable templates if there aren't any in the batch
             template_enabled = model.config.template.enabled
             model.config.template.enabled = template_enabled and any([
@@ -203,6 +239,8 @@ def run_model(model, batch, tag, output_dir):
             ])
 
             logger.info(f"Running inference for {tag}...")
+            logger.info(f"Input batch device: {next(iter(batch.values())).device}")
+            
             t = time.perf_counter()
             out = model(batch)
             

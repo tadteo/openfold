@@ -92,8 +92,8 @@ def trace_model_(model, sample_input):
     model.extra_msa_stack.blocks = extra_msa_blocks[:1]
 
     if(model.template_config.enabled):
-        template_pair_stack_blocks = model.template_pair_stack.blocks
-        model.template_pair_stack.blocks = template_pair_stack_blocks[:1]
+        template_pair_stack_blocks = model.template_embedder.template_pair_stack.blocks
+        model.template_embedder.template_pair_stack.blocks = template_pair_stack_blocks[:1]
 
     single_recycling_iter_input = tensor_tree_map(
         lambda t: t[..., :1], sample_input,
@@ -108,7 +108,7 @@ def trace_model_(model, sample_input):
     del evoformer_blocks, extra_msa_blocks
 
     if(model.template_config.enabled):
-        model.template_pair_stack.blocks = template_pair_stack_blocks
+        model.template_embedder.template_pair_stack.blocks = template_pair_stack_blocks
         del template_pair_stack_blocks
     
     def get_tuned_chunk_size(module):
@@ -131,9 +131,9 @@ def trace_model_(model, sample_input):
 
     if(model.template_config.enabled):
         template_pair_stack_chunk_size = model.globals.chunk_size
-        if(model.template_pair_stack.chunk_size_tuner is not None):
+        if(model.template_embedder.template_pair_stack.chunk_size_tuner is not None):
             template_pair_stack_chunk_size = get_tuned_chunk_size(
-                model.template_pair_stack
+                model.template_embedder.template_pair_stack
             )
 
     def trace_block(block, block_inputs):
@@ -227,17 +227,17 @@ def trace_model_(model, sample_input):
         ("inplace_safe", torch.tensor(True)),
     ]
     verify_arg_order(
-        model.evoformer.blocks[0].core.outer_product_mean.forward, 
+        model.evoformer.blocks[0].outer_product_mean.forward, 
         opm_arg_tuples
     )
     opm_args = [arg for _, arg in opm_arg_tuples]
     with torch.no_grad():
         for b in model.evoformer.blocks:
             traced_block = trace_block(
-                b.core.outer_product_mean, opm_args
+                b.outer_product_mean, opm_args
             )
-            del b.core.outer_product_mean
-            b.core.outer_product_mean = traced_block
+            del b.outer_product_mean
+            b.outer_product_mean = traced_block
 
     # Triangular multiplicative update (out)
     tri_mul_out_arg_tuples = [
@@ -247,17 +247,17 @@ def trace_model_(model, sample_input):
         ("_add_with_inplace", torch.tensor(True)),
     ]
     verify_arg_order(
-        model.evoformer.blocks[0].core.tri_mul_out.forward, 
+        model.evoformer.blocks[0].tri_mul_out.forward, 
         tri_mul_out_arg_tuples
     )
     tri_mul_out_args = [arg for _, arg in tri_mul_out_arg_tuples]
     with torch.no_grad():
         for b in model.evoformer.blocks:
             traced_block = trace_block(
-                b.core.tri_mul_out, tri_mul_out_args
+                b.tri_mul_out, tri_mul_out_args
             )
-            del b.core.tri_mul_out
-            b.core.tri_mul_out = traced_block
+            del b.tri_mul_out
+            b.tri_mul_out = traced_block
 
     # Triangular multiplicative update (in)
     tri_mul_in_arg_tuples = [
@@ -267,17 +267,17 @@ def trace_model_(model, sample_input):
         ("_add_with_inplace", torch.tensor(True)),
     ]
     verify_arg_order(
-        model.evoformer.blocks[0].core.tri_mul_in.forward, 
+        model.evoformer.blocks[0].tri_mul_in.forward, 
         tri_mul_in_arg_tuples
     )
     tri_mul_in_args = [arg for _, arg in tri_mul_in_arg_tuples]
     with torch.no_grad():
         for b in model.evoformer.blocks:
             traced_block = trace_block(
-                b.core.tri_mul_in, tri_mul_in_args
+                b.tri_mul_in, tri_mul_in_args
             )
-            del b.core.tri_mul_in
-            b.core.tri_mul_in = traced_block
+            del b.tri_mul_in
+            b.tri_mul_in = traced_block
 
     # Triangular attention (start)
     tri_att_start_arg_tuples = [
@@ -290,17 +290,17 @@ def trace_model_(model, sample_input):
         ("inplace_safe", torch.tensor(True)),
     ]
     verify_arg_order(
-        model.evoformer.blocks[0].core.tri_att_start.forward, 
+        model.evoformer.blocks[0].tri_att_start.forward, 
         tri_att_start_arg_tuples
     )
     tri_att_start_args = [arg for _, arg in tri_att_start_arg_tuples]
     with torch.no_grad():
         for b in model.evoformer.blocks:
             traced_block = trace_block(
-                b.core.tri_att_start, tri_att_start_args
+                b.tri_att_start, tri_att_start_args
             )
-            del b.core.tri_att_start
-            b.core.tri_att_start = traced_block
+            del b.tri_att_start
+            b.tri_att_start = traced_block
 
     # Triangular attention (end)
     tri_att_end_arg_tuples = [
@@ -313,17 +313,17 @@ def trace_model_(model, sample_input):
         ("inplace_safe", torch.tensor(True)),
     ]
     verify_arg_order(
-        model.evoformer.blocks[0].core.tri_att_end.forward, 
+        model.evoformer.blocks[0].tri_att_end.forward, 
         tri_att_end_arg_tuples
     )
     tri_att_end_args = [arg for _, arg in tri_att_end_arg_tuples]
     with torch.no_grad():
         for b in model.evoformer.blocks:
             traced_block = trace_block(
-                b.core.tri_att_end, tri_att_end_args
+                b.tri_att_end, tri_att_end_args
             )
-            del b.core.tri_att_end
-            b.core.tri_att_end = traced_block
+            del b.tri_att_end
+            b.tri_att_end = traced_block
 
     #evoformer_arg_tuples = [
     #    ("m", m),
@@ -400,7 +400,7 @@ def trace_model_(model, sample_input):
 #            )),
 #        ]
 #        verify_arg_order(
-#            model.template_pair_stack.blocks[0].forward, 
+#            model.template_embedder.template_pair_stack.blocks[0].forward, 
 #            template_pair_stack_arg_tuples
 #        )
 #        template_pair_stack_args = [
@@ -409,12 +409,12 @@ def trace_model_(model, sample_input):
 #    
 #        with torch.no_grad():
 #            traced_template_pair_stack = []
-#            for b in model.template_pair_stack.blocks:
+#            for b in model.template_embedder.template_pair_stack.blocks:
 #                traced_block = trace_block(b, template_pair_stack_args)
 #                traced_template_pair_stack.append(traced_block)
 #       
-#        del model.template_pair_stack.blocks
-#        model.template_pair_stack.blocks = traced_template_pair_stack
+#        del model.template_embedder.template_pair_stack.blocks
+#        model.template_embedder.template_pair_stack.blocks = traced_template_pair_stack
 
     # We need to do another dry run after tracing to allow the model to reach
     # top speeds. Why, I don't know.

@@ -45,9 +45,21 @@ class ExponentialMovingAverage:
                 if not isinstance(v, torch.Tensor):
                     self._update_state_dict_(v, stored)
                 else:
-                    diff = stored - v
+                    # Convert to float for computation, then back to original dtype
+                    orig_dtype = stored.dtype
+                    if orig_dtype in [torch.int32, torch.int64, torch.long]:
+                        # Skip update for integer tensors (e.g. step counters)
+                        continue
+                        
+                    stored_float = stored.float()
+                    v_float = v.float()
+                    
+                    diff = stored_float - v_float
                     diff *= 1 - self.decay
-                    stored -= diff
+                    stored_float -= diff
+                    
+                    # Convert back to original dtype
+                    state_dict[k] = stored_float.to(dtype=orig_dtype)
 
     def update(self, model: torch.nn.Module) -> None:
         """

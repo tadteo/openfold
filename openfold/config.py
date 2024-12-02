@@ -3,7 +3,7 @@ import copy
 import importlib
 import ml_collections as mlc
 
-number_of_layers_in_evoformer=48 #48 #12
+number_of_layers_in_evoformer=48 #48 #12 #4 for debugging
 
 def set_inf(c, inf):
     for k, v in c.items():

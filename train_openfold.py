@@ -5,6 +5,15 @@ import sys
 import json
 from datetime import datetime
 
+# Add logging configuration near the top of the file, after imports
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)s %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks.lr_monitor import LearningRateMonitor
 from pytorch_lightning.callbacks import DeviceStatsMonitor
@@ -74,6 +83,12 @@ class OpenFoldWrapper(pl.LightningModule):
         self.save_hyperparameters()
 
     def forward(self, batch):
+        # Ensure all input tensors are in bfloat16
+        #TODO: make it more generalisable fpr other dtypes
+        batch = tensor_tree_map(
+            lambda t: t.to(torch.bfloat16) if torch.is_floating_point(t) else t, 
+            batch
+        )
         return self.model(batch)
 
     def _log(self, loss_breakdown, batch, outputs, train=True):
@@ -114,13 +129,28 @@ class OpenFoldWrapper(pl.LightningModule):
             )
 
     def training_step(self, batch, batch_idx):
+        # Add dtype debugging
+        # for key, value in batch.items():
+        #     if torch.is_tensor(value):
+        #         logging.info(f"Input tensor {key} dtype: {value.dtype}")
+        
+        # # Check model parameters dtype
+        # for name, param in self.model.named_parameters():
+        #     if param.dtype != torch.bfloat16:
+        #         logging.info(f"Parameter {name} has dtype {param.dtype}")
+
         if self.ema.device != batch["aatype"].device:
             self.ema.to(batch["aatype"].device)
 
         ground_truth = batch.pop('gt_features', None)
 
-        # Run the model
-        outputs = self(batch)
+        # Add explicit precision handling
+        if isinstance(self.trainer.strategy, DeepSpeedStrategy):
+            logging.info("Using DeepSpeed strategy")   
+            outputs = self(batch)
+        else:
+            with torch.cuda.amp.autocast(enabled=True, dtype=torch.bfloat16):
+                outputs = self(batch)
 
         # Remove the recycling dimension
         batch = tensor_tree_map(lambda t: t[..., -1], batch)
@@ -138,46 +168,78 @@ class OpenFoldWrapper(pl.LightningModule):
         # Log it
         self._log(loss_breakdown, batch, outputs)
 
-        # Log the total loss explicitly with batch size
-        self.log('train_loss', loss, on_step=True, on_epoch=True, 
-                 prog_bar=True, logger=True, sync_dist=True,
-                 batch_size=batch["aatype"].shape[0])
-
         return loss
 
     def on_before_zero_grad(self, *args, **kwargs):
         self.ema.update(self.model)
 
     def validation_step(self, batch, batch_idx):
-        # At the start of validation, load the EMA weights
-        if(self.cached_weights is None):
-            # model.state_dict() contains references to model weights rather
-            # than copies. Therefore, we need to clone them before calling 
-            # load_state_dict().
-            clone_param = lambda t: t.detach().clone()
-            self.cached_weights = tensor_tree_map(clone_param, self.model.state_dict())
-            self.model.load_state_dict(self.ema.state_dict()["params"])
-
-        ground_truth = batch.pop('gt_features', None)
-
-        # Run the model
-        outputs = self(batch)
-        batch = tensor_tree_map(lambda t: t[..., -1], batch)
-
-        batch["use_clamped_fape"] = 0.
-
-        if self.is_multimer:
-            batch = multi_chain_permutation_align(out=outputs,
-                                                  features=batch,
-                                                  ground_truth=ground_truth)
-
-        # Compute loss and other metrics
-        _, loss_breakdown = self.loss(
-            outputs, batch, _return_breakdown=True
-        )
-
-        self._log(loss_breakdown, batch, outputs, train=False)
+        # Add detailed batch inspection
+        logging.info(f"Validation step batch_idx: {batch_idx}")
         
+        if batch is None:
+            logging.error("Received None batch in validation_step")
+            return
+        
+        # Add validation checks
+        if not batch:
+            logging.error("Empty batch received in validation step")
+            return
+        
+        if 'gt_features' not in batch:
+            logging.error(f"Missing gt_features in batch. Keys: {batch.keys()}")
+            return
+        
+        # Check if DeepSpeed is being used
+        using_deepspeed = isinstance(self.trainer.strategy, DeepSpeedStrategy)
+        
+        try:
+            if self.cached_weights is None:
+                clone_param = lambda t: t.detach().clone()
+                self.cached_weights = tensor_tree_map(clone_param, self.model.state_dict())
+                self.model.load_state_dict(self.ema.state_dict()["params"])
+
+            ground_truth = batch.pop('gt_features', None)
+
+            # Adjust precision handling based on training strategy
+            if using_deepspeed:
+                # Let DeepSpeed handle the precision
+                outputs = self(batch)
+            else:
+                # Use manual precision casting for non-DeepSpeed cases
+                with torch.cuda.amp.autocast(enabled=True, dtype=torch.bfloat16):
+                    outputs = self(batch)
+
+            # Debug output structure
+            if self.global_rank == 0 and batch_idx == 0:
+                logging.info(f"Output keys: {outputs.keys()}")
+                logging.info(f"Batch keys: {batch.keys()}")
+            
+            batch = tensor_tree_map(lambda t: t[..., -1], batch)
+
+            batch["use_clamped_fape"] = 0.
+
+            if self.is_multimer:
+                batch = multi_chain_permutation_align(out=outputs,
+                                                      features=batch,
+                                                      ground_truth=ground_truth)
+
+            # Compute loss and other metrics
+            _, loss_breakdown = self.loss(
+                outputs, batch, _return_breakdown=True
+            )
+            
+            # Debug loss breakdown
+            if self.global_rank == 0 and batch_idx == 0:
+                logging.info(f"Loss breakdown keys: {loss_breakdown.keys()}")
+                
+
+            self._log(loss_breakdown, batch, outputs, train=False)
+            
+        except Exception as e:
+            logging.error(f"Error in validation metrics: {str(e)}")
+            return {"error": torch.tensor(1.0)}
+
     def on_validation_epoch_end(self):
         # Restore the model weights to normal
         self.model.load_state_dict(self.cached_weights)
@@ -188,57 +250,58 @@ class OpenFoldWrapper(pl.LightningModule):
         outputs, 
         superimposition_metrics=False
     ):
-        metrics = {}
+        try:
+            metrics = {}
+            
+            gt_coords = batch["all_atom_positions"]
+            pred_coords = outputs["final_atom_positions"]
+            all_atom_mask = batch["all_atom_mask"]
+            
+            logging.debug(f"GT coords shape: {gt_coords.shape}")
+            logging.debug(f"Pred coords shape: {pred_coords.shape}")
+            logging.debug(f"Atom mask shape: {all_atom_mask.shape}")
         
-        gt_coords = batch["all_atom_positions"]
-        pred_coords = outputs["final_atom_positions"]
-        all_atom_mask = batch["all_atom_mask"]
-    
-        # This is super janky for superimposition. Fix later
-        gt_coords_masked = gt_coords * all_atom_mask[..., None]
-        pred_coords_masked = pred_coords * all_atom_mask[..., None]
-        ca_pos = residue_constants.atom_order["CA"]
-        gt_coords_masked_ca = gt_coords_masked[..., ca_pos, :]
-        pred_coords_masked_ca = pred_coords_masked[..., ca_pos, :]
-        all_atom_mask_ca = all_atom_mask[..., ca_pos]
-    
-        lddt_ca_score = lddt_ca(
-            pred_coords,
-            gt_coords,
-            all_atom_mask,
-            eps=self.config.globals.eps,
-            per_residue=False,
-        )
-   
-        metrics["lddt_ca"] = lddt_ca_score
-   
-        drmsd_ca_score = drmsd(
-            pred_coords_masked_ca,
-            gt_coords_masked_ca,
-            mask=all_atom_mask_ca, # still required here to compute n
-        )
-   
-        metrics["drmsd_ca"] = drmsd_ca_score
-    
-        if(superimposition_metrics):
-            superimposed_pred, alignment_rmsd = superimpose(
-                gt_coords_masked_ca, pred_coords_masked_ca, all_atom_mask_ca,
+            # This is super janky for superimposition. Fix later
+            gt_coords_masked = gt_coords * all_atom_mask[..., None]
+            pred_coords_masked = pred_coords * all_atom_mask[..., None]
+            ca_pos = residue_constants.atom_order["CA"]
+            gt_coords_masked_ca = gt_coords_masked[..., ca_pos, :]
+            pred_coords_masked_ca = pred_coords_masked[..., ca_pos, :]
+            all_atom_mask_ca = all_atom_mask[..., ca_pos]
+        
+            lddt_ca_score = lddt_ca(
+                pred_coords,
+                gt_coords,
+                all_atom_mask,
+                eps=self.config.globals.eps,
+                per_residue=False,
             )
-            gdt_ts_score = gdt_ts(
-                superimposed_pred, gt_coords_masked_ca, all_atom_mask_ca
-            )
-            gdt_ha_score = gdt_ha(
-                superimposed_pred, gt_coords_masked_ca, all_atom_mask_ca
-            )
+       
+            metrics["lddt_ca"] = lddt_ca_score
+       
+            if(superimposition_metrics):
+                superimposed_pred, alignment_rmsd = superimpose(
+                    gt_coords_masked_ca, pred_coords_masked_ca, all_atom_mask_ca,
+                )
+                gdt_ts_score = gdt_ts(
+                    superimposed_pred, gt_coords_masked_ca, all_atom_mask_ca
+                )
+                gdt_ha_score = gdt_ha(
+                    superimposed_pred, gt_coords_masked_ca, all_atom_mask_ca
+                )
 
-            metrics["alignment_rmsd"] = alignment_rmsd
-            metrics["gdt_ts"] = gdt_ts_score
-            metrics["gdt_ha"] = gdt_ha_score
-    
-        return metrics
+                metrics["alignment_rmsd"] = alignment_rmsd
+                metrics["gdt_ts"] = gdt_ts_score
+                metrics["gdt_ha"] = gdt_ha_score
+                logging.info(f"Computing superimposition metrics...")
+                
+            return metrics
+        except Exception as e:
+            logging.error(f"Error in validation metrics: {str(e)}")
+            return {"error": torch.tensor(1.0)}
 
     def configure_optimizers(self, 
-        learning_rate: float = 1e-4, #1e-3,
+        learning_rate: float = 1e-3, #1e-3,
         eps: float = 1e-5,
     ) -> torch.optim.Adam:
         # Ignored as long as a DeepSpeed optimizer is configured
@@ -295,12 +358,23 @@ class OpenFoldWrapper(pl.LightningModule):
             param.register_hook(lambda grad, name=name: self._gradient_hook(grad, name))
 
     def _gradient_hook(self, grad, name):
-        if torch.isnan(grad).any():
-            print(f"NaN gradient detected in {name}")
+        if torch.isnan(grad).any() or torch.isinf(grad).any():
+            logging.info(f"NaN gradient detected in {name}")
         norm = torch.norm(grad)
-        # if norm > 1:
-        #     print(f"Large gradient norm ({norm:.2f}) detected in {name}")
+        if norm > 10:  # Adjust threshold as needed
+            logging.info(f"Large gradient ({norm:.2f}) detected in {name}")
+        
         return grad
+
+    def _check_bf16_overflow(self, tensor, name):
+        if torch.isinf(tensor).any():
+            logging.info(f"INF values detected in {name}")
+            return True
+        max_val = tensor.abs().max()
+        if max_val > 3.4e38:  # bfloat16 max
+            logging.info(f"Potential overflow in {name}: {max_val}")
+            return True
+        return False
 
 def get_model_state_dict_from_ds_checkpoint(checkpoint_dir):
     latest_path = os.path.join(checkpoint_dir, 'latest')
@@ -338,7 +412,7 @@ def main(args):
         config.update_from_flattened_dict(custom_config_dict)
 
     model_module = OpenFoldWrapper(config)
-    print(summarize(model_module, max_depth=3))
+    logging.info(summarize(model_module, max_depth=3))
     
     if args.resume_from_ckpt:
         if args.resume_model_weights_only:
@@ -378,21 +452,27 @@ def main(args):
     if(args.script_modules):
         script_preset_(model_module)
 
+    logging.info(f"The dataset fraction is: {args.the_dataset_fraction}")
+    
     if "multimer" in args.config_preset:
         data_module = OpenFoldMultimerDataModule(
-        config=config.data, 
-        batch_seed=args.seed,
-        **vars(args)
-    )
+            config=config.data, 
+            batch_seed=args.seed,
+            dataset_fraction=args.the_dataset_fraction,
+            **vars(args)
+        )
     else:
         data_module = OpenFoldDataModule(
             config=config.data, 
             batch_seed=args.seed,
+            dataset_fraction=args.the_dataset_fraction,
             **vars(args)
         )
 
     data_module.prepare_data()
     data_module.setup()
+    
+    logging.info(f"Validation dataset size: {len(data_module.eval_dataset)}")
     
     callbacks = []
     callbacks.append(NaNDetector())
@@ -467,40 +547,47 @@ def main(args):
         loggers.append(wdb_logger)
 
     cluster_environment = MPIEnvironment() if args.mpi_plugin else None
+    logging.info(f"The cluster environment is {cluster_environment}")
     if(args.deepspeed_config_path is not None):
+        # When using DeepSpeed, precision should be configured in the DeepSpeed config
+        if args.precision != "bf16":
+            logging.warning("When using DeepSpeed, precision settings should be configured in DeepSpeed config")
+        
         strategy = DeepSpeedStrategy(
             config=args.deepspeed_config_path,
             cluster_environment=cluster_environment,
         )
-        if(args.wandb and is_rank_zero):
-            wdb_logger.experiment.save(args.deepspeed_config_path)
-            wdb_logger.experiment.save("openfold/config.py")
-    elif (args.gpus is not None and args.gpus > 1) or args.num_nodes > 1:
-        strategy = DDPStrategy(find_unused_parameters=True,
-                               cluster_environment=cluster_environment)
+    else:
+        # For non-DeepSpeed training, configure precision normally
+        if args.precision == "bf16":
+            args.precision = "bf16-mixed"
+        
+        if (args.gpus is not None and args.gpus > 1) or args.num_nodes > 1:
+            strategy = DDPStrategy(
+                find_unused_parameters=False,
+                cluster_environment=cluster_environment
+            )
     
     if(args.wandb and is_rank_zero):
         freeze_path = f"{wdb_logger.experiment.dir}/package_versions.txt"
         os.system(f"{sys.executable} -m pip freeze > {freeze_path}")
         wdb_logger.experiment.save(f"{freeze_path}")
 
-    # Set float32 matmul precision
-    torch.set_float32_matmul_precision('high')
-
-    # Update the precision setting
-    if args.precision == 'bf16':
-        args.precision = 'bf16-mixed'
+    # # Set float32 matmul precision
+    # torch.set_float32_matmul_precision('high')
 
     trainer_kws = ['num_nodes', 'max_epochs', 'log_every_n_steps',
                    'flush_logs_ever_n_steps', 'num_sanity_val_steps', 'reload_dataloaders_every_n_epochs']
     trainer_args = {k: v for k, v in vars(args).items() if k in trainer_kws}
     trainer_args.update({
         'default_root_dir': args.output_dir,
+        'strategy': strategy,
         'callbacks': callbacks,
         'logger': loggers,
         'precision': args.precision,
         'accelerator': 'gpu',
         'devices': args.gpus if args.gpus is not None else 1,
+        'gradient_clip_val': 1.0,
     })
     trainer = pl.Trainer(**trainer_args)
 
@@ -730,6 +817,11 @@ if __name__ == "__main__":
         help="Type of Evoformer to use"
     )
     
+    parser.add_argument(
+        "--the_dataset_fraction", type=float, default=1.0, 
+        help="Fraction of dataset to use (between 0 and 1). Default: 1.0"
+    )
+    
     trainer_group = parser.add_argument_group(
         'Arguments to pass to PyTorch Lightning Trainer')
     trainer_group.add_argument(
@@ -758,6 +850,8 @@ if __name__ == "__main__":
     trainer_group.add_argument("--accumulate_grad_batches", type=int, default=1,
                                help="Accumulate gradients over k batches before next optimizer step.")
 
+    
+
     args = parser.parse_args()
 
     if(args.seed is None and 
@@ -776,5 +870,9 @@ if __name__ == "__main__":
         run_desc = args.run_description.replace(" ", "_")
     else:
         run_desc = "run"
+    
+    logging.info(f"Dataset fraction: {args.the_dataset_fraction}")
+    if args.the_dataset_fraction <= 0:
+        raise ValueError("Dataset fraction must be greater than 0")
     
     main(args)

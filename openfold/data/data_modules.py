@@ -5,6 +5,7 @@ import logging
 import os
 import pickle
 from typing import Optional, Sequence, Any, Union
+import random
 
 import ml_collections as mlc
 import pytorch_lightning as pl
@@ -42,6 +43,7 @@ class OpenFoldSingleDataset(torch.utils.data.Dataset):
                  alignment_index: Optional[Any] = None,
                  _output_raw: bool = False,
                  _structure_index: Optional[Any] = None,
+                 dataset_fraction: float = 1.0,
                  ):
         """
             Args:
@@ -316,6 +318,7 @@ class OpenFoldSingleMultimerDataset(torch.utils.data.Dataset):
                  alignment_index: Optional[Any] = None,
                  _output_raw: bool = False,
                  _structure_index: Optional[Any] = None,
+                 dataset_fraction: float = 1.0,
                  ):
         """
         This class check each individual PDB ID and return its chain(s) features/ground truth 
@@ -884,11 +887,15 @@ class OpenFoldDataModule(pl.LightningDataModule):
                  _distillation_structure_index_path: Optional[str] = None,
                  alignment_index_path: Optional[str] = None,
                  distillation_alignment_index_path: Optional[str] = None,
+                 dataset_fraction: float = 1.0,
                  **kwargs
                  ):
         super(OpenFoldDataModule, self).__init__()
 
         self.config = config
+        logging.info(f"Initializing OpenFoldDataModule with batch size: {self.config.data_module.data_loaders.batch_size}")
+        logging.info(f"Number of workers: {self.config.data_module.data_loaders.num_workers}")
+
         self.template_mmcif_dir = template_mmcif_dir
         self.max_template_date = max_template_date
         self.train_data_dir = train_data_dir
@@ -912,6 +919,7 @@ class OpenFoldDataModule(pl.LightningDataModule):
         self.obsolete_pdbs_file_path = obsolete_pdbs_file_path
         self.batch_seed = batch_seed
         self.train_epoch_len = train_epoch_len
+        self.dataset_fraction = dataset_fraction
 
         if self.train_data_dir is None and self.predict_data_dir is None:
             raise ValueError(
@@ -959,7 +967,8 @@ class OpenFoldDataModule(pl.LightningDataModule):
                               config=self.config,
                               kalign_binary_path=self.kalign_binary_path,
                               template_release_dates_cache_path=self.template_release_dates_cache_path,
-                              obsolete_pdbs_file_path=self.obsolete_pdbs_file_path)
+                              obsolete_pdbs_file_path=self.obsolete_pdbs_file_path,
+                              dataset_fraction=self.dataset_fraction)
 
         if self.training_mode:
             train_dataset = dataset_gen(
@@ -1019,7 +1028,9 @@ class OpenFoldDataModule(pl.LightningDataModule):
                     max_template_hits=self.config.eval.max_template_hits,
                     mode="eval",
                 )
+                logging.info(f"Validation dataset size: {len(self.eval_dataset)}")
             else:
+                logging.info("No validation dataset specified, setting eval_dataset to None")
                 self.eval_dataset = None
         else:
             self.predict_dataset = dataset_gen(
@@ -1107,7 +1118,8 @@ class OpenFoldMultimerDataModule(OpenFoldDataModule):
                               config=self.config,
                               kalign_binary_path=self.kalign_binary_path,
                               template_release_dates_cache_path=self.template_release_dates_cache_path,
-                              obsolete_pdbs_file_path=self.obsolete_pdbs_file_path)
+                              obsolete_pdbs_file_path=self.obsolete_pdbs_file_path,
+                              dataset_fraction=self.dataset_fraction)
 
         if self.training_mode:
             train_dataset = dataset_gen(

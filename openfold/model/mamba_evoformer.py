@@ -1,4 +1,5 @@
 import sys
+import logging
 import torch
 import torch.nn as nn
 from typing import Tuple, Sequence, Optional
@@ -14,17 +15,7 @@ from openfold.model.msa import (
 )
 from openfold.model.outer_product_mean import OuterProductMean
 from openfold.model.pair_transition import PairTransition
-from openfold.model.triangular_attention import (
-    TriangleAttention,
-    TriangleAttentionStartingNode,
-    TriangleAttentionEndingNode,
-)
-from openfold.model.triangular_multiplicative_update import (
-    TriangleMultiplicationOutgoing,
-    TriangleMultiplicationIncoming,
-    FusedTriangleMultiplicationIncoming,
-    FusedTriangleMultiplicationOutgoing
-)
+
 from openfold.utils.checkpointing import checkpoint_blocks, get_checkpoint_fn
 from openfold.utils.chunk_utils import chunk_layer, ChunkSizeTuner
 from openfold.utils.tensor_utils import add
@@ -119,37 +110,19 @@ class PairStack(nn.Module):
         fuse_projection_weights: bool,
         inf: float,
         eps: float,
-        d_state: int = 64,  # SSM state expansion factor normally 64 or 128
+        d_state: int = 128,  # SSM state expansion factor normally 64 or 128
         d_conv: int = 4,    # Local convolution width try to change these
         expand: int = 2,    # Block expansion factor
     ):
         super(PairStack, self).__init__()
-
-        if fuse_projection_weights:
-            self.tri_mul_out = FusedTriangleMultiplicationOutgoing(
-                c_z,
-                c_hidden_mul,
-            )
-            self.tri_mul_in = FusedTriangleMultiplicationIncoming(
-                c_z,
-                c_hidden_mul,
-            )
-        else:
-            self.tri_mul_out = TriangleMultiplicationOutgoing(
-                c_z,
-                c_hidden_mul,
-            )
-            self.tri_mul_in = TriangleMultiplicationIncoming(
-                c_z,
-                c_hidden_mul,
-            )
 
         # Initialize the TriangularPositionalEncoding module
         self.triangular_pos_enc = TriangularPositionalEncoding(c_z)
         self.triangular_pos_dec = TriangularPositionalDecoding(c_z)
 
         # Add a single layer normalization instance
-        self.layer_norm = nn.LayerNorm(c_z)
+        self.layer_norm = LayerNorm(c_z)
+        
         # print(f"c_z is: {c_z}")
         # Initialize the Mamba module
         self.mamba = Mamba2(
@@ -157,14 +130,25 @@ class PairStack(nn.Module):
             d_state=d_state,  # SSM state expansion factor
             d_conv=d_conv,    # Local convolution width
             expand=expand,    # Block expansion factor
-        ).to("cuda")
+        )
+        
+        # Modify the dtype update hook to handle both training and eval modes
+        # def _update_mamba_dtype(module, input):
+        #     # Add defensive check for empty input
+        #     if not input or len(input) == 0:
+        #         return input
+            
+        #     input_dtype = input[0].dtype
+        #     if input_dtype != self.mamba.in_proj.weight.dtype:
+        #         self.mamba = self.mamba.to(dtype=input_dtype)
+        #         logging.debug(f"Updated Mamba dtype to {input_dtype}")
+        
+        # self.register_forward_pre_hook(_update_mamba_dtype)
 
         self.pair_transition = PairTransition(
             c_z,
             transition_n,
         )
-
-        self.ps_dropout_row_layer = DropoutRowwise(pair_dropout)
 
     def forward(self,
         z: torch.Tensor,
@@ -180,76 +164,58 @@ class PairStack(nn.Module):
         # should be disabled to better approximate the exact activations of
         # the original.
         
-        ### Can be removed?
+        # Add debug logging
+        logging.debug(f"PairStack input shape: {z.shape}")
+        
+        # Get original dtype from the model parameters
+        orig_dtype = next(self.parameters()).dtype
+        logging.debug(f"Original dtype: {orig_dtype}")
+        # Track intermediate tensors
+        z_orig = z.clone()
+        
+        
         pair_trans_mask = pair_mask if _mask_trans else None
 
         if (_attn_chunk_size is None):
-            _attn_chunk_size = chunk_size
-
-        tmu_update = self.tri_mul_out(
-            z,
-            mask=pair_mask,
-            inplace_safe=inplace_safe,
-            _add_with_inplace=True,
-        )
-        if (not inplace_safe):
-            z = z + self.ps_dropout_row_layer(tmu_update)
-        else:
-            z = tmu_update
-
-        del tmu_update
-
-        tmu_update = self.tri_mul_in(
-            z,
-            mask=pair_mask,
-            inplace_safe=inplace_safe,
-            _add_with_inplace=True,
-        )
-        if (not inplace_safe):
-            z = z + self.ps_dropout_row_layer(tmu_update)
-        else:
-            z = tmu_update
-
-        del tmu_update
-        ###
-
+            _attn_chunk_size = chunk_size    
         
-        # Apply triangular positional encoding to convert matrix to 1D vector
-        z = self.triangular_pos_enc(z)
+        # Apply layer normalization before encoding
         z = self.layer_norm(z)
         
-        # Reshape z to [batch_size, seq_len * seq_len, dim] for mamba
-        batch_size, seq_len, _, dim = z.shape
-        z = z.reshape(batch_size, seq_len * seq_len, dim).contiguous()
-        # print(f"z.shape is: {z.shape}")
         
-        # print(f"The z shape is: {z.shape}")
-        
+        # Apply triangular positional encoding to convert matrix to 1D vector  
+        z = self.triangular_pos_enc(z) # Returns [batch_size, seq_len * seq_len, dim]
+
+        # **First Skip Connection Starts Here**
+        residual = z
         # Process the 1D vector with mamba module
-        z = self.mamba(z)
-
-        # Reconvert the 1D vector back to a matrix
-        z = z.reshape(batch_size, seq_len, seq_len, dim).contiguous()
-        self.triangular_pos_dec(z)
-        z = self.layer_norm(z)  # You can also add it after Mamba
-
-        z = add(z,
-                self.ps_dropout_row_layer(
-                    z
-                ),
-                inplace=inplace_safe,
-                )
+        z = self.mamba(z.to(self.mamba.in_proj.weight.dtype))
+        
+        # **First Skip Connection Ends Here**
+        z = z + residual
+        
+        # Triangular Positional Decoding
+        z = self.triangular_pos_dec(z)
         
         z = z.transpose(-2, -3)
         if (inplace_safe):
             z = z.contiguous()
-
+        
+        # **Second Skip Connection**
+        # logging.info(f"z type after mamba layer: {z.dtype}")
+        # Before pair transition, ensure z is back to original dtype
+        if z is not None:
+            z = z.to(orig_dtype)
+        # logging.info(f"z type before pair transition: {z.dtype}")
         z = add(z,
                 self.pair_transition(
                     z, mask=pair_trans_mask, chunk_size=chunk_size,
                 ),
                 inplace=inplace_safe,
         )
+        
+        # Verify output matches input shape
+        assert z.shape == z_orig.shape, f"Shape mismatch: {z.shape} vs {z_orig.shape}"
 
         return z
 

@@ -104,8 +104,12 @@ def dict_map(fn, dic, leaf_type):
     return new_dict
 
 
-def tree_map(fn, tree, leaf_type):
+def tree_map(fn, tree, leaf_type=torch.Tensor):
+    # Add debugging
+    # logging.info(f"Processing tree of type: {type(tree)}")
+        
     if isinstance(tree, dict):
+        logging.debug(f"Dict keys: {tree.keys()}")
         return dict_map(fn, tree, leaf_type)
     elif isinstance(tree, list):
         return [tree_map(fn, x, leaf_type) for x in tree]
@@ -114,6 +118,7 @@ def tree_map(fn, tree, leaf_type):
     elif isinstance(tree, leaf_type):
         return fn(tree)
     else:
+        logging.error(f"Unsupported tree type: {type(tree)}, the tree is {tree}")
         raise ValueError(f"Tree of type {type(tree)} not supported")
 
 

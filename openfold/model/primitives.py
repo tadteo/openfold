@@ -222,21 +222,36 @@ class LayerNorm(nn.Module):
             deepspeed_is_installed and 
             deepspeed.comm.comm.is_initialized()
         )
-        if d is torch.bfloat16 and not deepspeed_is_initialized:
-            with torch.amp.autocast('cuda',enabled=False):
+        
+        # Match parameter dtypes to input
+        weight = self.weight.to(dtype=d)
+        bias = self.bias.to(dtype=d)
+
+        if d is torch.bfloat16:
+            if not deepspeed_is_initialized:
+                with torch.amp.autocast('cuda', enabled=False):
+                    out = nn.functional.layer_norm(
+                        x, 
+                        self.c_in, 
+                        weight,
+                        bias,
+                        self.eps
+                    )
+            else:
+                # When using DeepSpeed, ensure everything is in bfloat16
                 out = nn.functional.layer_norm(
-                    x, 
-                    self.c_in, 
-                    self.weight.to(dtype=d), 
-                    self.bias.to(dtype=d), 
-                    self.eps
+                    x.to(torch.bfloat16),
+                    self.c_in,
+                    weight.to(torch.bfloat16),
+                    bias.to(torch.bfloat16),
+                    self.eps,
                 )
         else:
             out = nn.functional.layer_norm(
                 x,
                 self.c_in,
-                self.weight,
-                self.bias,
+                weight,
+                bias,
                 self.eps,
             )
 

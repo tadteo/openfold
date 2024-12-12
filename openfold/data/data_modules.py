@@ -43,7 +43,6 @@ class OpenFoldSingleDataset(torch.utils.data.Dataset):
                  alignment_index: Optional[Any] = None,
                  _output_raw: bool = False,
                  _structure_index: Optional[Any] = None,
-                 dataset_fraction: float = 1.0,
                  ):
         """
             Args:
@@ -318,7 +317,6 @@ class OpenFoldSingleMultimerDataset(torch.utils.data.Dataset):
                  alignment_index: Optional[Any] = None,
                  _output_raw: bool = False,
                  _structure_index: Optional[Any] = None,
-                 dataset_fraction: float = 1.0,
                  ):
         """
         This class check each individual PDB ID and return its chain(s) features/ground truth 
@@ -887,7 +885,6 @@ class OpenFoldDataModule(pl.LightningDataModule):
                  _distillation_structure_index_path: Optional[str] = None,
                  alignment_index_path: Optional[str] = None,
                  distillation_alignment_index_path: Optional[str] = None,
-                 dataset_fraction: float = 1.0,
                  **kwargs
                  ):
         super(OpenFoldDataModule, self).__init__()
@@ -919,7 +916,6 @@ class OpenFoldDataModule(pl.LightningDataModule):
         self.obsolete_pdbs_file_path = obsolete_pdbs_file_path
         self.batch_seed = batch_seed
         self.train_epoch_len = train_epoch_len
-        self.dataset_fraction = dataset_fraction
 
         if self.train_data_dir is None and self.predict_data_dir is None:
             raise ValueError(
@@ -968,7 +964,7 @@ class OpenFoldDataModule(pl.LightningDataModule):
                               kalign_binary_path=self.kalign_binary_path,
                               template_release_dates_cache_path=self.template_release_dates_cache_path,
                               obsolete_pdbs_file_path=self.obsolete_pdbs_file_path,
-                              dataset_fraction=self.dataset_fraction)
+                              )
 
         if self.training_mode:
             train_dataset = dataset_gen(
@@ -1119,7 +1115,7 @@ class OpenFoldMultimerDataModule(OpenFoldDataModule):
                               kalign_binary_path=self.kalign_binary_path,
                               template_release_dates_cache_path=self.template_release_dates_cache_path,
                               obsolete_pdbs_file_path=self.obsolete_pdbs_file_path,
-                              dataset_fraction=self.dataset_fraction)
+                              )
 
         if self.training_mode:
             train_dataset = dataset_gen(

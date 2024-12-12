@@ -122,7 +122,7 @@ class PairStack(nn.Module):
 
         # Add a single layer normalization instance
         self.layer_norm = LayerNorm(c_z)
-        
+        # self.group_norm = GroupNorm(c_z)
         # print(f"c_z is: {c_z}")
         # Initialize the Mamba module
         self.mamba = Mamba2(
@@ -130,6 +130,7 @@ class PairStack(nn.Module):
             d_state=d_state,  # SSM state expansion factor
             d_conv=d_conv,    # Local convolution width
             expand=expand,    # Block expansion factor
+            norm_before_gate=True,
         )
         
         # Modify the dtype update hook to handle both training and eval modes
@@ -149,6 +150,9 @@ class PairStack(nn.Module):
             c_z,
             transition_n,
         )
+        
+        self.ps_dropout_row_layer = DropoutRowwise(pair_dropout)
+
 
     def forward(self,
         z: torch.Tensor,
@@ -181,7 +185,7 @@ class PairStack(nn.Module):
         
         # Apply layer normalization before encoding
         z = self.layer_norm(z)
-        
+        # z = self.group_norm(z)
         
         # Apply triangular positional encoding to convert matrix to 1D vector  
         z = self.triangular_pos_enc(z) # Returns [batch_size, seq_len * seq_len, dim]
@@ -196,6 +200,13 @@ class PairStack(nn.Module):
         
         # Triangular Positional Decoding
         z = self.triangular_pos_dec(z)
+        
+        z = add(z,
+                self.ps_dropout_row_layer(
+                    z
+                ),
+                inplace=inplace_safe,
+                )
         
         z = z.transpose(-2, -3)
         if (inplace_safe):

@@ -451,21 +451,17 @@ def main(args):
     # TorchScript components of the model
     if(args.script_modules):
         script_preset_(model_module)
-
-    logging.info(f"The dataset fraction is: {args.the_dataset_fraction}")
     
     if "multimer" in args.config_preset:
         data_module = OpenFoldMultimerDataModule(
             config=config.data, 
             batch_seed=args.seed,
-            dataset_fraction=args.the_dataset_fraction,
             **vars(args)
         )
     else:
         data_module = OpenFoldDataModule(
             config=config.data, 
             batch_seed=args.seed,
-            dataset_fraction=args.the_dataset_fraction,
             **vars(args)
         )
 
@@ -817,11 +813,6 @@ if __name__ == "__main__":
         help="Type of Evoformer to use"
     )
     
-    parser.add_argument(
-        "--the_dataset_fraction", type=float, default=1.0, 
-        help="Fraction of dataset to use (between 0 and 1). Default: 1.0"
-    )
-    
     trainer_group = parser.add_argument_group(
         'Arguments to pass to PyTorch Lightning Trainer')
     trainer_group.add_argument(
@@ -870,9 +861,5 @@ if __name__ == "__main__":
         run_desc = args.run_description.replace(" ", "_")
     else:
         run_desc = "run"
-    
-    logging.info(f"Dataset fraction: {args.the_dataset_fraction}")
-    if args.the_dataset_fraction <= 0:
-        raise ValueError("Dataset fraction must be greater than 0")
     
     main(args)
